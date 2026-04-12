@@ -19,14 +19,14 @@ Send a message from Signal, get a response from your local LLM — privately, wi
 
 There are existing Signal bot frameworks (like Clawbot/OpenClaw) that abstract the Signal protocol, but this project intentionally uses a direct **signal-cli-rest-api + Ollama** architecture:
 
-| Approach | This Project (Direct) | Clawbot/OpenClaw (Framework) |
-|----------|----------------------|------------------------------|
-| **Privacy** | ✅ No middleware; messages go directly from Signal → your code → local LLM | ⚠️ Often relies on cloud relays or third-party bridges |
+| Approach | This Project (Direct)                                                            | Clawbot/OpenClaw (Framework) |
+|----------|----------------------------------------------------------------------------------|------------------------------|
+| **Privacy** | ✅ No middleware; self-hosted; messages go from Signal → your code → local LLM    | ⚠️ Often relies on cloud relays or third-party bridges |
 | **Control** | ✅ Full access to Signal CLI features; customize polling, retries, error handling | ⚠️ Limited to framework's abstraction layer |
-| **LLM Flexibility** | ✅ Native Ollama integration; any local model, no API keys | ⚠️ Usually tied to OpenAI/Claude APIs; local LLM support varies |
-| **Deployment** | ✅ Fully containerized; runs entirely offline | ⚠️ Often requires external webhooks or cloud dependencies |
-| **Setup Complexity** | ❌ Manual Signal linking required; more initial configuration | ✅ Often simpler onboarding with hosted solutions |
-| **Maintenance** | ❌ You own the integration; updates depend on signal-cli-rest-api | ✅ Framework handles protocol updates |
+| **LLM Flexibility** | ✅ Native Ollama integration; any local model, no API keys                        | ⚠️ Usually tied to OpenAI/Claude APIs; local LLM support varies |
+| **Deployment** | ✅ Fully containerized; runs entirely offline                                     | ⚠️ Often requires external webhooks or cloud dependencies |
+| **Setup Complexity** | ❌ Manual Signal linking required; more initial configuration                     | ✅ Often simpler onboarding with hosted solutions |
+| **Maintenance** | ❌ You own the integration; updates depend on signal-cli-rest-api                 | ✅ Framework handles protocol updates |
 
 ## ✨ Features
 
@@ -37,6 +37,27 @@ There are existing Signal bot frameworks (like Clawbot/OpenClaw) that abstract t
 - 🔒 **Sender allowlist** — Restrict access to specific phone numbers
 - 🐳 **Docker containerized** — One-command deployment
 - 📡 **Auto-detection** — Automatically finds available Ollama models at startup
+
+## 🔒 Privacy & Data Flow
+
+> [!IMPORTANT]
+> **Privacy Disclaimer:** This bot is designed for users who want **complete data sovereignty**. However, understanding exactly how your data moves is crucial for maintaining Signal's privacy guarantees. The containerisation and architecture used by user for OSB will affect privacy.
+
+### Data Flows
+
+1. **Signal → signal-cli-rest-api**: Messages travel via Signal's standard end-to-end encryption (E2EE). The REST API decrypts them **locally** using your linked device's keys. Your messages are never decrypted on any remote server.
+2. **signal-cli-rest-api → Bot**: Plaintext messages travel over **localhost HTTP** (Docker internal network only). This stays within your machine.
+3. **Bot → Ollama**: Prompts are sent via **HTTP to your specified Ollama URL** (typically `localhost` or your LAN). No internet connection required if Ollama is local.
+
+### What Data is Stored
+
+| Data | Location                   | Retention               | Notes                                                          |
+|------|----------------------------|-------------------------|----------------------------------------------------------------|
+| **Conversation History** | In-memory (Python dict)    | Until bot restart or `/reset` | Never written to disk                                          |
+| **Signal Keys** | `./signald-config/` volume | Persistent              | Required for Signal protocol                                   |
+| **Phone Numbers** | `.env` allowlist, logs     | Persistent              | For access control; logged                                     |
+| **Message Content** | In-memory | Until restart or /reset | Not written to disk by the bot; exists in conversation history |
+
 
 ## 📋 Table of Contents
 

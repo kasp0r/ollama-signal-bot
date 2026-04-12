@@ -158,7 +158,7 @@ class OllamaSignalBot:
                 "stream": False,
             }
 
-            logger.info(f"Querying Ollama ({self.ollama_model}): {prompt[:80]}...")
+            logger.info(f"Querying Ollama ({self.ollama_model}) Prompt length: {len(prompt)}")
             response = await self.client.post(url, json=payload)
             response.raise_for_status()
 
@@ -168,7 +168,7 @@ class OllamaSignalBot:
             # Append assistant response to history
             self.conversations[sender].append({"role": "assistant", "content": answer})
 
-            logger.info(f"Ollama response: {answer[:80]}...")
+            logger.info(f"Ollama response length: {len(answer)}")
 
             # Append verbose telemetry if enabled for this sender
             if sender in self.verbose_users:
@@ -590,7 +590,7 @@ class OllamaSignalBot:
             return
 
         sender = envelope.get("source", "unknown")
-        logger.info(f"Message from {sender}: {message_text[:80]}...")
+        logger.info(f"Message received from {sender} Message length: {len(message_text)}")
 
         # Sender allowlist check
         if not self.is_sender_allowed(sender):
