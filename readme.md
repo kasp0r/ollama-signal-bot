@@ -10,7 +10,7 @@ A self-hosted Signal messaging bot that forwards your messages to an [Ollama](ht
 
 Send a message from Signal, get a response from your local LLM — privately, with no cloud APIs, no subscriptions, and no data leaving your network.
 
-![Ollama Signal Bot Screenshot](./asset/screenshot.jpeg)
+<img src="./asset/screenshot.jpeg" width="270" alt="Screenshot from Android">
 
 > [!NOTE]
 > While this application has been tested predominantly with the `gemma4:latest` model from Ollama, **all models** are expected to work correctly.
