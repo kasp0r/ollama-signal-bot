@@ -1,0 +1,26 @@
+Third-Party Licenses and Attributions
+=====================================
+
+This project uses the following software with their respective licenses:
+
+signal-cli-rest-api
+  - License: GPL-3.0
+  - Source: https://github.com/bbernhard/signal-cli-rest-api
+  - Notes: This is a copyleft license. If you distribute this application,
+    you must comply with GPL-3.0 terms regarding source code availability.
+
+Ollama
+  - License: MIT
+  - Source: https://github.com/ollama/ollama
+
+Python Dependencies (see requirements.txt)
+  - httpx: BSD-3-Clause
+  - python-dotenv: BSD-3-Clause
+  - Other dependencies as specified in their respective packages
+
+Important GPL-3.0 Notice:
+-------------------------
+Since this project includes signal-cli-rest-api (GPL-3.0), any distribution
+of this software as a whole may be subject to GPL-3.0 requirements.
+Users should review the full GPL-3.0 license at:
+https://www.gnu.org/licenses/gpl-3.0.html

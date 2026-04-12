@@ -1,0 +1,30 @@
+services:
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:0.98
+    container_name: signal-api
+    environment:
+      - MODE=normal
+    ports:
+      - "18080:8080"
+    volumes:
+      - signal-cli-data:/home/.local/share/signal-cli
+    restart: unless-stopped
+
+  ollama-signal-bot:
+    build: .
+    container_name: ollama-signal-bot
+    environment:
+      - SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
+      - SIGNAL_API_URL=http://signal-api:8080
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma4:latest}
+      - SYSTEM_PROMPT=${SYSTEM_PROMPT:-You are a helpful assistant.}
+      - ALLOWED_SENDERS=${ALLOWED_SENDERS:-*}
+    env_file:
+      - .env
+    depends_on:
+      - signal-api
+    restart: unless-stopped
+
+volumes:
+  signal-cli-data:
