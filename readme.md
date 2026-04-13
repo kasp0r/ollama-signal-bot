@@ -73,6 +73,7 @@ There are existing Signal bot frameworks (like Clawbot/OpenClaw) that abstract t
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+- [Alternative Projects](#alternative-projects)
 
 ## Prerequisites
 
