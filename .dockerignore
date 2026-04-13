@@ -1,0 +1,15 @@
+asset/
+.venv/
+.env
+.git/
+.gitignore
+*.md
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+run.ps1
+run.sh
+signald-config/
+docker-compose.yml

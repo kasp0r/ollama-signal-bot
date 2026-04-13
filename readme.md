@@ -12,6 +12,8 @@ Send a message from Signal, get a response from your local LLM — privately, wi
 
 <img src="./asset/screenshot.jpeg" width="270" alt="Screenshot from Android">
 
+**[📹 Watch a demo video](./asset/ollama-signal-bot-demo-android.mp4)**
+
 > [!NOTE]
 > While this application has been tested predominantly with the `gemma4:latest` model from Ollama, **all models** are expected to work correctly.
 
