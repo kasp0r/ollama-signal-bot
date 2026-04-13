@@ -370,6 +370,20 @@ http://localhost:18080/v1/about
 
 MIT License — see [LICENSE](LICENSE) for details.
 
+## Alternative Projects
+
+If this project doesn't quite fit your needs, here are other excellent Signal + Ollama/LLM integrations worth exploring:
+
+| Project | Description | Key Features |
+|---------|-------------|--------------|
+| [**Signallama**](https://github.com/aljazceru/signallama) | Dedicated Signal bot for Ollama chat | Direct Signal-to-Ollama interface, focused simplicity |
+| [**uoltz**](https://github.com/maciejjedrzejczyk/uoltz) | Local-first AI chatbot for Signal | Pluggable skills, voice transcription, multi-agent orchestration |
+| [**Signal-to-Ollama Bridge**](https://github.com/asynchronous-x/signal-to-ollama-bridge) | Minimal Express.js bridge service | Emoji reactions, conversation context tracking, lightweight |
+| [**Clawdbot/OpenClaw**](https://github.com/OpenClaw) | Multi-platform bot framework | Supports Signal, WhatsApp, Telegram; Ollama local provider support |
+| [**Signal Bot Crawly**](https://github.com/hajekad/signal-bot-crawly) | Rust-based Signal ↔ Open WebUI bridge | Group chat support, summarization, web search integration |
+
+
+
 ---
 
 **Author:** Rudi Ball  
