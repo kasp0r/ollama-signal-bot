@@ -1,4 +1,26 @@
 services:
+  # Bundled Ollama — started only when you pass --profile ollama
+  # (setup.py does this automatically when no host Ollama is detected).
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    profiles: ["ollama"]
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPU acceleration:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
   signal-api:
     image: bbernhard/signal-cli-rest-api:0.98
     container_name: signal-api
@@ -14,17 +36,17 @@ services:
     build: .
     container_name: ollama-signal-bot
     environment:
-      - SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
       - SIGNAL_API_URL=http://signal-api:8080
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma4:latest}
-      - SYSTEM_PROMPT=${SYSTEM_PROMPT:-You are a helpful assistant.}
-      - ALLOWED_SENDERS=${ALLOWED_SENDERS:-*}
     env_file:
       - .env
+    # Lets http://host.docker.internal:11434 reach a host-installed Ollama
+    # on Linux too (not just Docker Desktop).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - signal-api
     restart: unless-stopped
 
 volumes:
   signal-cli-data:
+  ollama-data:

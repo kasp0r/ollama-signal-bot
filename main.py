@@ -67,11 +67,12 @@ def format_for_signal(text: str) -> str:
     # Ordered lists: clean up but keep numbers
     text = re.sub(r"^(\s*)\d+\.\s+", r"\1", text, flags=re.MULTILINE)
 
+    # Images: ![alt](url) → [Image: alt]  (must run before links,
+    # otherwise the link pattern consumes [alt](url) and leaves "!alt").
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"[Image: \1]", text)
+
     # Links: [text](url) → text (url)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
-
-    # Images: ![alt](url) → [Image: alt]
-    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"[Image: \1]", text)
 
     # Blockquotes: > text → │ text
     text = re.sub(r"^>\s?", "│ ", text, flags=re.MULTILINE)
@@ -706,7 +707,7 @@ class OllamaSignalBot:
 async def main():
     phone_number = os.getenv("SIGNAL_PHONE_NUMBER")
     signal_api_url = os.getenv("SIGNAL_API_URL", "http://signal-api:8080")
-    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
     ollama_model = os.getenv("OLLAMA_MODEL", "")
     system_prompt = os.getenv("SYSTEM_PROMPT", "You are a helpful assistant.")
     allowed_senders = os.getenv("ALLOWED_SENDERS", "*")
