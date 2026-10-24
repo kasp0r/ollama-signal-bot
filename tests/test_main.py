@@ -1,6 +1,12 @@
-"""Tests for the Ollama Signal Bot's pure logic (no Docker/network needed)."""
+"""Tests for the Ollama Signal Bot.
+
+Pure logic is tested directly; network calls are mocked via httpx.MockTransport.
+"""
 
 import asyncio
+import json
+
+import httpx
 
 import main
 
@@ -139,3 +145,155 @@ def test_unknown_command():
     bot = _make_bot()
     resp = asyncio.run(bot.handle_command("+123", "/nope"))
     assert "Unknown command" in resp
+
+
+# ── Ollama query flow (mocked network) ────────────────────────────
+
+def _mock_bot(handler):
+    """Create a bot whose httpx client uses a mocked transport."""
+    bot = _make_bot()
+    bot.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return bot
+
+
+def _ollama_ok(request):
+    return httpx.Response(200, json={
+        "model": "gemma4:latest",
+        "message": {"content": "Hi there!"},
+        "total_duration": 1_000_000_000,
+        "load_duration": 10_000_000,
+        "prompt_eval_count": 5,
+        "prompt_eval_duration": 100_000_000,
+        "eval_count": 3,
+        "eval_duration": 200_000_000,
+    })
+
+
+def test_query_ollama_success():
+    bot = _mock_bot(_ollama_ok)
+    resp = asyncio.run(bot.query_ollama("+123", "hello"))
+    assert resp == "Hi there!"
+    assert [m["role"] for m in bot.conversations["+123"]] == ["user", "assistant"]
+
+
+def test_query_ollama_no_model():
+    bot = _make_bot()
+    bot.ollama_model = ""
+    resp = asyncio.run(bot.query_ollama("+123", "hi"))
+    assert "No model is currently loaded" in resp
+
+
+def test_query_ollama_http_error():
+    def handler(request):
+        return httpx.Response(500, json={"error": "boom"})
+
+    bot = _mock_bot(handler)
+    resp = asyncio.run(bot.query_ollama("+123", "hi"))
+    assert "Error communicating with Ollama" in resp
+
+
+def test_query_ollama_history_bounded():
+    bot = _mock_bot(_ollama_ok)
+    bot.max_history = 1
+    for msg in ["first", "second", "third", "fourth"]:
+        asyncio.run(bot.query_ollama("+123", msg))
+    history = bot.conversations["+123"]
+    assert len(history) <= 3  # bounded to roughly max_history pairs
+    assert history[-2]["content"] == "fourth"  # latest user message retained
+
+
+# ── Signal messaging (mocked network) ─────────────────────────────
+
+def test_send_message_chunks_long_messages():
+    sent = []
+
+    def handler(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    bot = _mock_bot(handler)
+    asyncio.run(bot.send_message("+123", "x" * 5000))
+
+    assert len(sent) == 2
+    assert all(len(m["message"]) <= 4096 for m in sent)
+    assert all(m["recipients"] == ["+123"] for m in sent)
+    assert all(m["number"] == "+15551234567" for m in sent)
+
+
+def test_receive_messages_account_not_registered():
+    def handler(request):
+        return httpx.Response(400, json={})
+
+    bot = _mock_bot(handler)
+    assert asyncio.run(bot.receive_messages()) == []
+
+
+def test_receive_messages_timeout():
+    def handler(request):
+        raise httpx.TimeoutException("timed out")
+
+    bot = _mock_bot(handler)
+    assert asyncio.run(bot.receive_messages()) == []
+
+
+# ── slash-command argument validation ─────────────────────────────
+
+def test_maxhistory_invalid_number():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/maxhistory abc"))
+    assert "valid integer" in resp
+
+
+def test_maxhistory_too_low():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/maxhistory 0"))
+    assert "at least 1" in resp
+
+
+def test_maxhistory_too_high():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/maxhistory 10001"))
+    assert "cannot exceed" in resp
+
+
+def test_maxhistory_set():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/maxhistory 25"))
+    assert "25" in resp
+    assert bot.max_history == 25
+
+
+def test_verbose_toggle():
+    bot = _make_bot()
+    resp_on = asyncio.run(bot.handle_command("+123", "/verbose"))
+    assert "enabled" in resp_on
+    assert "+123" in bot.verbose_users
+    resp_off = asyncio.run(bot.handle_command("+123", "/verbose"))
+    assert "disabled" in resp_off
+    assert "+123" not in bot.verbose_users
+
+
+def test_history_empty():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/history"))
+    assert "No conversation history" in resp
+
+
+def test_model_no_args():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/model"))
+    assert "gemma4:latest" in resp
+
+
+# ── format_for_signal edge cases ──────────────────────────────────
+
+def test_format_empty():
+    assert main.format_for_signal("") == ""
+
+
+def test_format_collapses_blank_lines():
+    assert main.format_for_signal("a\n\n\n\nb") == "a\n\nb"
+
+
+def test_image_no_alt():
+    assert main.format_for_signal("![](https://x/y.png)") == "[Image: ]"
