@@ -131,8 +131,10 @@ Send any of these to the bot's number:
 | `/show <name>` | Model details |
 | `/reset` | Clear your conversation history |
 | `/history` | Conversation stats |
+| `/recent` / `/recent <n>` | Show recent conversation messages |
 | `/maxhistory` / `/maxhistory <n>` | Show / set memory limit (pairs) |
 | `/verbose` | Toggle response telemetry |
+| `/config` | Show current settings |
 
 With `/verbose` enabled, each reply includes telemetry:
 

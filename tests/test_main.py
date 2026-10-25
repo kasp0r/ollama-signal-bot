@@ -127,6 +127,8 @@ def test_cmd_help():
     assert "/help" in resp
     assert "/reset" in resp
     assert "/verbose" in resp
+    assert "/recent" in resp
+    assert "/config" in resp
 
 
 def test_cmd_reset():
@@ -297,3 +299,56 @@ def test_format_collapses_blank_lines():
 
 def test_image_no_alt():
     assert main.format_for_signal("![](https://x/y.png)") == "[Image: ]"
+
+
+# ── /recent and /config commands ──────────────────────────────────
+
+def test_recent_empty():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/recent"))
+    assert "No conversation yet" in resp
+
+
+def test_recent_shows_history():
+    bot = _make_bot()
+    bot.conversations["+123"] = [
+        {"role": "user", "content": "hello there"},
+        {"role": "assistant", "content": "hi, how can I help?"},
+    ]
+    resp = asyncio.run(bot.handle_command("+123", "/recent"))
+    assert "hello there" in resp
+    assert "how can I help" in resp
+    assert "You" in resp
+    assert "Bot" in resp
+
+
+def test_recent_invalid_number():
+    bot = _make_bot()
+    bot.conversations["+123"] = [{"role": "user", "content": "x"}]
+    resp = asyncio.run(bot.handle_command("+123", "/recent abc"))
+    assert "valid number" in resp
+
+
+def test_recent_too_low():
+    bot = _make_bot()
+    bot.conversations["+123"] = [{"role": "user", "content": "x"}]
+    resp = asyncio.run(bot.handle_command("+123", "/recent 0"))
+    assert "at least 1" in resp
+
+
+def test_recent_caps_at_20():
+    bot = _make_bot()
+    bot.conversations["+123"] = [
+        {"role": "user", "content": f"message number {i}"} for i in range(25)
+    ]
+    resp = asyncio.run(bot.handle_command("+123", "/recent 999"))
+    assert "message number 24" in resp
+    assert "message number 0" not in resp
+
+
+def test_config():
+    bot = _make_bot()
+    resp = asyncio.run(bot.handle_command("+123", "/config"))
+    assert "gemma4:latest" in resp
+    assert "OPEN" in resp
+    assert "50 pairs" in resp

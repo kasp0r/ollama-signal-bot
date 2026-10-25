@@ -249,7 +249,9 @@ class OllamaSignalBot:
             "/history — Show conversation stats\n"
             "/maxhistory — Show max history limit\n"
             "/maxhistory <n> — Set max history to n pairs\n"
-            "/verbose — Toggle telemetry on responses"
+            "/verbose — Toggle telemetry on responses\n"
+            "/recent — Show recent conversation messages\n"
+            "/config — Show current settings"
         )
 
     async def cmd_list(self, sender: str) -> str:
@@ -454,6 +456,54 @@ class OllamaSignalBot:
             f"  Memory limit: {self.max_history} pairs"
         )
 
+    async def cmd_recent(self, sender: str, args: str) -> str:
+        """Show the sender's most recent conversation messages."""
+        history = self.conversations[sender]
+        if not history:
+            return "📜 No conversation yet. Start chatting!"
+
+        n = 5
+        if args.strip():
+            try:
+                n = int(args.strip())
+            except ValueError:
+                return "⚠️ Please provide a valid number, e.g. /recent 10"
+            if n < 1:
+                return "⚠️ Number of messages must be at least 1."
+            n = min(n, 20)  # cap to avoid flooding
+
+        recent = history[-n:]
+        lines = [f"📜 Recent messages ({len(recent)}):"]
+        for m in recent:
+            role = "👤 You" if m["role"] == "user" else "🤖 Bot"
+            content = " ".join(m["content"].split())
+            if len(content) > 280:
+                content = content[:280] + "…"
+            lines.append(f"{role}: {content}")
+        return "\n\n".join(lines)
+
+    async def cmd_config(self, sender: str) -> str:
+        """Show the current configuration."""
+        if self.allowed_senders is None:
+            senders = "OPEN (everyone)"
+        else:
+            senders = ", ".join(sorted(self.allowed_senders))
+
+        verbose = "on" if sender in self.verbose_users else "off"
+
+        prompt = self.system_prompt
+        if len(prompt) > 120:
+            prompt = prompt[:120] + "…"
+
+        return (
+            "⚙️ Current configuration\n\n"
+            f"  Model: {self.ollama_model or 'NONE'}\n"
+            f"  System prompt: {prompt}\n"
+            f"  Allowed senders: {senders}\n"
+            f"  Max history: {self.max_history} pairs\n"
+            f"  Verbose (you): {verbose}"
+        )
+
     async def cmd_maxhistory(self, sender: str, args: str) -> str:
         """View or set the maximum conversation history (in message pairs)."""
         if not args:
@@ -512,9 +562,11 @@ class OllamaSignalBot:
             "/show": lambda: self.cmd_show(sender, args),
             "/reset": lambda: self.cmd_reset(sender),
             "/history": lambda: self.cmd_history(sender),
+            "/recent": lambda: self.cmd_recent(sender, args),
             "/maxhistory": lambda: self.cmd_maxhistory(sender, args),
             "/verbose": lambda: self.cmd_verbose(sender),
             "/heartbeat": lambda: self.cmd_heartbeat(sender),
+            "/config": lambda: self.cmd_config(sender),
         }
 
         handler = commands.get(command)
