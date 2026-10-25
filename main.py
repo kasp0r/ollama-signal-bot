@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import signal
 import sys
 import time
@@ -43,6 +44,7 @@ RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
 RATE_LIMIT_WINDOW_SECONDS = 60
 HEARTBEAT_FILE = "/tmp/ollama-signal-bot.heartbeat"
 CONFIG_FILE = "/app/data/config.json"
+WEBUI_TOKEN_FILE = "/app/data/webui-token"
 WEBUI_PORT = 8000  # internal web UI port (host mapping set in docker-compose.yml)
 
 
@@ -53,6 +55,36 @@ def _touch_heartbeat() -> None:
             f.write(".")
     except OSError:
         pass
+
+
+def _resolve_webui_token() -> str:
+    """Return the web UI token, auto-generating one if none is configured.
+
+    If WEBUI_TOKEN is set, it is used as-is (and not logged). Otherwise a
+    random token is generated once, persisted to the data volume so it survives
+    restarts, and logged so the user can find it in `docker logs`.
+    """
+    token = os.getenv("WEBUI_TOKEN", "")
+    if token:
+        return token
+
+    try:
+        with open(WEBUI_TOKEN_FILE, encoding="utf-8") as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        token = ""
+
+    if not token:
+        token = secrets.token_urlsafe(32)
+        try:
+            os.makedirs(os.path.dirname(WEBUI_TOKEN_FILE), exist_ok=True)
+            with open(WEBUI_TOKEN_FILE, "w", encoding="utf-8") as f:
+                f.write(token)
+        except OSError as exc:
+            logger.warning(f"Could not persist web UI token: {exc}")
+
+    logger.info(f"Web UI token: {token}")
+    return token
 
 def format_for_signal(text: str) -> str:
     """
@@ -1024,7 +1056,7 @@ async def main():
     except ValueError:
         temperature = DEFAULT_TEMPERATURE
 
-    webui_token = os.getenv("WEBUI_TOKEN", "") or None
+    webui_token = _resolve_webui_token()
     webui_port = WEBUI_PORT
 
     bot = OllamaSignalBot(

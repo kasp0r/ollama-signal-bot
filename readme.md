@@ -141,8 +141,9 @@ scanning the QR code, and lets you change the model, temperature, system
 prompt, history limit, and allowlists — changes apply immediately and persist
 across restarts (stored in the `bot-data` volume).
 
-By default the UI is bound to `127.0.0.1` (localhost only). To require a
-password, set `WEBUI_TOKEN` in `.env`; the UI will then prompt for it.
+By default the UI is bound to `127.0.0.1` (localhost only). A random access
+token is generated at startup and printed to the logs (`docker compose logs
+ollama-signal-bot`). To use a fixed token instead, set `WEBUI_TOKEN` in `.env`.
 
 ## Bot commands
 

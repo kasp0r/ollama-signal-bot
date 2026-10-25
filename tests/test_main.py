@@ -528,6 +528,30 @@ def test_get_available_models():
     assert asyncio.run(bot.get_available_models()) == ["a", "b"]
 
 
+# ── web UI token ──────────────────────────────────────────────────
+
+def test_resolve_webui_token_from_env(monkeypatch):
+    monkeypatch.setenv("WEBUI_TOKEN", "mysecret")
+    assert main._resolve_webui_token() == "mysecret"
+
+
+def test_resolve_webui_token_generates_and_persists(monkeypatch, tmp_path):
+    monkeypatch.delenv("WEBUI_TOKEN", raising=False)
+    token_file = tmp_path / "webui-token"
+    monkeypatch.setattr(main, "WEBUI_TOKEN_FILE", str(token_file))
+    token = main._resolve_webui_token()
+    assert token and len(token) >= 32
+    assert token_file.read_text().strip() == token
+
+
+def test_resolve_webui_token_loads_existing(monkeypatch, tmp_path):
+    monkeypatch.delenv("WEBUI_TOKEN", raising=False)
+    token_file = tmp_path / "webui-token"
+    token_file.write_text("persistedtoken123")
+    monkeypatch.setattr(main, "WEBUI_TOKEN_FILE", str(token_file))
+    assert main._resolve_webui_token() == "persistedtoken123"
+
+
 def test_config_persistence(tmp_path):
     cfg = tmp_path / "config.json"
     bot = _make_bot(config_file=str(cfg))
