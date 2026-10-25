@@ -281,8 +281,4 @@ See [NOTICE](NOTICE) for full details. This project itself is licensed under the
 | [Clawdbot/OpenClaw](https://github.com/OpenClaw) | Multi-platform framework |
 | [Signal Bot Crawly](https://github.com/hajekad/signal-bot-crawly) | Rust, groups & summarization |
 
----
-
-**Author:** Rudi Ball
-
 See [CHANGELOG.md](CHANGELOG.md) for a full history of changes.
