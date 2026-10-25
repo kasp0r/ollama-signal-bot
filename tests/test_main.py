@@ -669,6 +669,29 @@ def test_unlink_account_already_unlinked():
     assert asyncio.run(bot.unlink_account()) is True
 
 
+def test_reset_all(tmp_path):
+    def handler(request):
+        return httpx.Response(200)
+
+    cfg = tmp_path / "config.json"
+    db = tmp_path / "history.db"
+    bot = _make_bot(config_file=str(cfg), history_db_file=str(db))
+    bot.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    bot.phone_number = "+15551234567"
+    bot.conversations["+123"] = [{"role": "user", "content": "a"}]
+    bot._persist_message("+123", "user", "a")
+    bot.apply_runtime_config({"temperature": 0.3})
+    bot.total_prompt_tokens = 10
+
+    asyncio.run(bot.reset_all())
+    assert bot.phone_number == ""
+    assert bot.conversations == {}
+    assert bot.get_stats()["total_messages"] == 0
+    assert bot.temperature == 0.7  # reset to default
+    assert bot.total_prompt_tokens == 0
+    assert not cfg.exists()  # persisted config removed
+
+
 def test_config_persistence(tmp_path):
     cfg = tmp_path / "config.json"
     bot = _make_bot(config_file=str(cfg))

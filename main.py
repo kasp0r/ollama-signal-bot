@@ -474,6 +474,27 @@ class OllamaSignalBot:
         self._clear_sender_db(sender)
         return count
 
+    def _clear_all_history(self) -> None:
+        """Clear all conversation history (in-memory and database)."""
+        self.conversations.clear()
+        if self.db is not None:
+            try:
+                self.db.execute("DELETE FROM messages")
+                self.db.commit()
+            except sqlite3.Error as exc:
+                logger.warning(f"Could not clear history DB: {exc}")
+
+    async def reset_all(self) -> bool:
+        """Reset the entire installation to a fresh state."""
+        if self.phone_number:
+            await self.unlink_account()
+        self._clear_all_history()
+        self.reset_runtime_config()
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        logger.info("Installation reset to a fresh state")
+        return True
+
     def get_stats(self) -> dict:
         """Return usage statistics."""
         per_user = {}

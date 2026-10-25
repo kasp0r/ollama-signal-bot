@@ -43,6 +43,7 @@ HTML = """<!DOCTYPE html>
   button { margin-top: 1rem; padding: .55rem 1.2rem; font-size: .95rem;
            background: #1a73e8; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
   button.secondary { background: #444; }
+  button.danger { background: #b00020; }
   #token-row { display: none; }
   #message { margin-top: 1rem; font-weight: 600; }
   #message.ok { color: #188038; }
@@ -169,6 +170,10 @@ HTML = """<!DOCTYPE html>
   <button type="submit">Save changes</button>
   <button type="button" class="secondary" onclick="resetConfig()">Reset to default settings</button>
 </form>
+
+<h2>Danger zone</h2>
+<button type="button" class="danger" onclick="resetAll()">Reset entire installation</button>
+<div class="hint">Unlinks the Signal account, clears all conversation history, and resets settings to defaults.</div>
 </div>
 
 <div id="message"></div>
@@ -347,6 +352,21 @@ async function resetConfig() {
     if (!r.ok) { showMessage('Reset failed', true); return; }
     fillForm(await r.json());
     showMessage('Reset to defaults', false);
+  } catch (e) { showMessage('Reset failed: ' + e, true); }
+}
+
+async function resetAll() {
+  if (!confirm('RESET the entire installation? This unlinks your Signal account, clears all conversation history, and resets settings to defaults.')) return;
+  if (!confirm('Are you sure? This cannot be undone.')) return;
+  try {
+    const r = await fetch('/api/reset', {method: 'POST', headers: headers()});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) { showMessage('Reset failed', true); return; }
+    showMessage('Installation reset — link your Signal account to start fresh.', false);
+    refreshStatus();
+    loadStats();
+    loadConfig();
+    loadQR();
   } catch (e) { showMessage('Reset failed: ' + e, true); }
 }
 
@@ -573,6 +593,12 @@ async def _unlink_account(request):
     return web.json_response({"unlinked": True})
 
 
+async def _reset_all(request):
+    bot = request.app[_BOT_KEY]
+    await bot.reset_all()
+    return web.json_response({"reset": True})
+
+
 def create_app(bot, token=None):
     app = web.Application(middlewares=[_auth_middleware])
     app[_BOT_KEY] = bot
@@ -588,6 +614,7 @@ def create_app(bot, token=None):
     app.router.add_post("/api/conversations/reset", _reset_conversation)
     app.router.add_post("/api/models/pull", _pull_model)
     app.router.add_post("/api/account/unlink", _unlink_account)
+    app.router.add_post("/api/reset", _reset_all)
     return app
 
 
