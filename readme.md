@@ -62,7 +62,7 @@ python setup.py
 `setup.py` is interactive and asks only a handful of questions:
 
 1. **Ollama** — if you already run Ollama, it's detected and reused automatically; otherwise the script bundles one in Docker for you.
-2. **Phone number** — the bot's Signal number (with country code, e.g. `+1234567890`).
+2. **Phone number** — optional; if you leave it blank, it's auto-detected after you link your Signal account.
 3. **Model** — which Ollama model to use (defaults to `gemma4:latest`).
 4. **System prompt** and **allowed senders** — both optional, with sensible defaults.
 
@@ -92,7 +92,7 @@ The app remains the primary device; the bot is linked to it and must stay instal
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SIGNAL_PHONE_NUMBER` | Yes | — | The bot's Signal number (e.g. `+1234567890`) |
+| `SIGNAL_PHONE_NUMBER` | No | auto-detect | The bot's Signal number (auto-detected after linking) |
 | `OLLAMA_URL` | No | `http://ollama:11434` | Ollama URL (see below) |
 | `OLLAMA_MODEL` | No | auto-detect | Model name (e.g. `gemma4:latest`) |
 | `OLLAMA_TEMPERATURE` | No | `0.7` | Sampling temperature (0.0-1.0) |

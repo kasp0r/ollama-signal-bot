@@ -137,11 +137,10 @@ def configure(existing):
     def default(key):
         return existing.get(key, "")
 
-    while True:
-        phone = ask("Bot's Signal phone number (with country code)", default("SIGNAL_PHONE_NUMBER"))
-        if re.fullmatch(r"\+?\d{8,15}", phone):
-            break
-        print("  Please enter a valid number, e.g. +1234567890")
+    phone = ask("Bot's Signal phone number (optional — leave empty to auto-detect)", default("SIGNAL_PHONE_NUMBER"))
+    if phone and not re.fullmatch(r"\+?\d{8,15}", phone):
+        print("  Invalid number — it will be auto-detected after linking instead.")
+        phone = ""
 
     model = ask("Ollama model", default("OLLAMA_MODEL") or "gemma4:latest")
     system_prompt = ask("System prompt", default("SYSTEM_PROMPT") or "You are a helpful assistant.")
@@ -224,7 +223,7 @@ def link_device(phone):
         return True
 
     print(f"  Linked accounts: {', '.join(accounts)}")
-    if phone not in accounts:
+    if phone and phone not in accounts:
         print(f"  ⚠ Your configured number ({phone}) doesn't match the linked account.")
         print("    Check SIGNAL_PHONE_NUMBER in .env matches the linked Signal number.")
     return True

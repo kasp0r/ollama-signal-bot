@@ -578,3 +578,21 @@ def test_webui_auth():
             await client.close()
 
     asyncio.run(run())
+
+
+# ── phone-number auto-detection ───────────────────────────────────
+
+def test_detect_phone_number():
+    def handler(request):
+        return httpx.Response(200, json=["+15551234567"])
+
+    bot = _mock_bot(handler)
+    assert asyncio.run(bot.detect_phone_number()) == "+15551234567"
+
+
+def test_detect_phone_number_none():
+    def handler(request):
+        return httpx.Response(200, json=[])
+
+    bot = _mock_bot(handler)
+    assert asyncio.run(bot.detect_phone_number()) is None
