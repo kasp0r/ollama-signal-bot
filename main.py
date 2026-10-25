@@ -1146,7 +1146,7 @@ class OllamaSignalBot:
                 f"{self.signal_api_url}/v1/accounts/{number}",
                 timeout=30.0,
             )
-            ok = r.status_code in (200, 204, 404)
+            ok = r.status_code in (200, 204)
         except Exception as e:
             logger.error(f"Failed to unlink account {number}: {e}")
             return False
@@ -1255,20 +1255,24 @@ class OllamaSignalBot:
 
     async def run(self):
         """Main polling loop."""
-        await self._wait_until_ready()
-        logger.info(f"Bot is running — polling for messages... (model: {self.ollama_model or 'NONE'})")
-
         while True:
-            try:
-                messages = await self.receive_messages()
-                for msg in messages:
-                    envelope = msg.get("envelope", {})
-                    await self.handle_message(envelope)
-            except Exception as e:
-                logger.error(f"Error in polling loop: {e}")
+            await self._wait_until_ready()
+            logger.info(f"Bot is running — polling for messages... (model: {self.ollama_model or 'NONE'})")
 
-            _touch_heartbeat()
-            await asyncio.sleep(1)
+            while self.phone_number:
+                try:
+                    messages = await self.receive_messages()
+                    for msg in messages:
+                        envelope = msg.get("envelope", {})
+                        await self.handle_message(envelope)
+                except Exception as e:
+                    logger.error(f"Error in polling loop: {e}")
+
+                _touch_heartbeat()
+                await asyncio.sleep(1)
+
+            # Phone number became empty (e.g., account unlinked) — wait to re-link.
+            logger.info("No linked Signal account — waiting to link...")
 
     async def stop(self):
         """Clean up."""
