@@ -1,11 +1,36 @@
 services:
+  # Bundled Ollama — started only when you pass --profile ollama
+  # (setup.py does this automatically when no host Ollama is detected).
+  ollama:
+    image: ollama/ollama:0.40.11
+    container_name: ollama
+    profiles: ["ollama"]
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    volumes:
+      - ollama-data:/root/.ollama
+    # Bound to localhost only — the bot reaches Ollama over the internal
+    # Docker network, so it never needs to be exposed beyond this machine.
+    ports:
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+    # Uncomment for NVIDIA GPU acceleration:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
   signal-api:
-    image: bbernhard/signal-cli-rest-api:0.98
+    image: bbernhard/signal-cli-rest-api:0.101
     container_name: signal-api
     environment:
       - MODE=normal
+    # Bound to localhost only — only the setup script (on the host) needs it.
     ports:
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
     volumes:
       - signal-cli-data:/home/.local/share/signal-cli
     restart: unless-stopped
@@ -14,17 +39,29 @@ services:
     build: .
     container_name: ollama-signal-bot
     environment:
-      - SIGNAL_PHONE_NUMBER=${SIGNAL_PHONE_NUMBER}
       - SIGNAL_API_URL=http://signal-api:8080
-      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma4:latest}
-      - SYSTEM_PROMPT=${SYSTEM_PROMPT:-You are a helpful assistant.}
-      - ALLOWED_SENDERS=${ALLOWED_SENDERS:-*}
     env_file:
       - .env
+    ports:
+      # Web UI — bound to localhost only. Open http://127.0.0.1:8000
+      - "127.0.0.1:${WEBUI_PORT:-8000}:8000"
+    volumes:
+      - bot-data:/app/data
+    # Lets http://host.docker.internal:11434 reach a host-installed Ollama
+    # on Linux too (not just Docker Desktop).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - signal-api
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /tmp/ollama-signal-bot.heartbeat 2>/dev/null || echo 0) )) -lt 60"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   signal-cli-data:
+  ollama-data:
+  bot-data:

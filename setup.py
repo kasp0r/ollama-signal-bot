@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""
+Ollama Signal Bot — one-command setup.
+
+Runs entirely on your machine using Python's standard library only
+(no `pip install` needed). It:
+
+  1. Checks Docker / Docker Compose
+  2. Detects Ollama (your host, or runs one in Docker)
+  3. Asks a few questions and writes .env for you
+  4. Builds and starts the Signal API
+  5. Links your Signal account (scan a QR code)
+  6. Pulls the model (Docker Ollama) and starts the bot
+
+Usage:
+    python setup.py
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+# Host-facing ports defined in docker-compose.yml
+SIGNAL_API_URL = "http://localhost:18080"
+OLLAMA_LOCAL_URL = "http://localhost:11434"
+
+# URL the bot uses to reach a host-installed Ollama from inside Docker.
+# Works on Linux/macOS/Windows thanks to the `host-gateway` entry in compose.
+OLLAMA_HOST_FROM_DOCKER = "http://host.docker.internal:11434"
+
+# URL the bot uses to reach the bundled Docker Ollama service.
+OLLAMA_DOCKER_URL = "http://ollama:11434"
+
+
+# ── small helpers ──────────────────────────────────────────────────
+
+def ask(prompt, default=None):
+    suffix = f" [{default}]" if default else ""
+    answer = input(f"{prompt}{suffix}: ").strip()
+    return answer if answer else (default or "")
+
+
+def confirm(prompt, default=True):
+    suffix = "[Y/n]" if default else "[y/N]"
+    answer = input(f"{prompt} {suffix}: ").strip().lower()
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+
+def http_get_json(url, timeout=5):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def run(cmd):
+    """Run a command, inheriting stdio, returning its exit code."""
+    return subprocess.run(cmd).returncode
+
+
+def detect_compose():
+    """Return the Docker Compose command as a list, or None if unavailable."""
+    if shutil.which("docker"):
+        try:
+            subprocess.run(
+                ["docker", "compose", "version"],
+                capture_output=True, check=True,
+            )
+            return ["docker", "compose"]
+        except Exception:
+            pass
+    if shutil.which("docker-compose"):
+        return ["docker-compose"]
+    return None
+
+
+def read_env(path):
+    """Parse a simple KEY=VALUE file into a dict (missing file -> {})."""
+    values = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                values[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return values
+
+
+def clean(value):
+    """Make a value safe for a single-line .env entry."""
+    return re.sub(r"\s+", " ", value).strip()
+
+
+# ── prerequisite checks ───────────────────────────────────────────
+
+def check_prerequisites():
+    print("== Checking prerequisites ==")
+    if not shutil.which("docker"):
+        print("  ✗ Docker not found. Install it: https://docs.docker.com/get-docker/")
+        return False
+    print("  ✓ Docker found")
+
+    compose = detect_compose()
+    if not compose:
+        print("  ✗ Docker Compose not found.")
+        return False
+    print(f"  ✓ Docker Compose found ({' '.join(compose)})")
+
+    return compose
+
+
+def detect_host_ollama():
+    """Return True if an Ollama server is already reachable on localhost."""
+    return http_get_json(f"{OLLAMA_LOCAL_URL}/api/tags", timeout=3) is not None
+
+
+# ── configuration ─────────────────────────────────────────────────
+
+def configure(existing):
+    print()
+    print("== Configuration ==")
+
+    def default(key):
+        return existing.get(key, "")
+
+    phone = ask("Bot's Signal phone number (optional — leave empty to auto-detect)", default("SIGNAL_PHONE_NUMBER"))
+    if phone and not re.fullmatch(r"\+?\d{8,15}", phone):
+        print("  Invalid number — it will be auto-detected after linking instead.")
+        phone = ""
+
+    model = ask("Ollama model", default("OLLAMA_MODEL") or "gemma4:latest")
+    system_prompt = ask("System prompt", default("SYSTEM_PROMPT") or "You are a helpful assistant.")
+    allowed = ask("Allowed senders (* = everyone)", default("ALLOWED_SENDERS") or "*")
+    admins = ask("Admin senders (* = everyone)", default("ALLOWED_ADMINS") or "*")
+
+    return {
+        "SIGNAL_PHONE_NUMBER": clean(phone),
+        "OLLAMA_MODEL": clean(model),
+        "SYSTEM_PROMPT": clean(system_prompt),
+        "ALLOWED_SENDERS": clean(allowed),
+        "ALLOWED_ADMINS": clean(admins),
+    }
+
+
+def write_env(values, ollama_url):
+    lines = [
+        "# Ollama Signal Bot — configuration (generated by setup.py)",
+        "",
+        "SIGNAL_PHONE_NUMBER=" + values["SIGNAL_PHONE_NUMBER"],
+        "OLLAMA_URL=" + ollama_url,
+        "OLLAMA_MODEL=" + values["OLLAMA_MODEL"],
+        "SYSTEM_PROMPT=" + values["SYSTEM_PROMPT"],
+        "ALLOWED_SENDERS=" + values["ALLOWED_SENDERS"],
+        "ALLOWED_ADMINS=" + values["ALLOWED_ADMINS"],
+        "",
+    ]
+    with open(".env", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print("  ✓ Wrote .env")
+
+
+# ── service lifecycle ─────────────────────────────────────────────
+
+def wait_for_signal_api():
+    print("  Waiting for Signal API...")
+    for i in range(30):
+        if http_get_json(f"{SIGNAL_API_URL}/v1/about", timeout=3) is not None:
+            print("  ✓ Signal API is ready")
+            return True
+        time.sleep(2)
+    print("  ✗ Signal API did not become ready in time")
+    return False
+
+
+def wait_for_ollama():
+    print("  Waiting for Ollama...")
+    for i in range(30):
+        if http_get_json(f"{OLLAMA_LOCAL_URL}/api/tags", timeout=3) is not None:
+            print("  ✓ Ollama is ready")
+            return True
+        time.sleep(2)
+    print("  ✗ Ollama did not become ready in time")
+    return False
+
+
+# ── signal linking ────────────────────────────────────────────────
+
+def link_device(phone):
+    print()
+    print("== Link your Signal account ==")
+    print("This links the bot as a secondary device (like Signal Desktop).")
+
+    device_name = ask("Device name", "Ollama Signal Bot")
+    qr_url = f"{SIGNAL_API_URL}/v1/qrcodelink?device_name={urllib.parse.quote(device_name)}"
+
+    print()
+    print("Open this URL in your browser to see the QR code:")
+    print(f"  {qr_url}")
+    print()
+    print("Then, on the Signal app registered with the bot's number:")
+    print("  1. Settings → Linked Devices → +")
+    print("  2. Scan the QR code")
+    print()
+    input("Press Enter after scanning and approving on your phone...")
+
+    accounts = http_get_json(f"{SIGNAL_API_URL}/v1/accounts", timeout=10) or []
+    if not accounts:
+        print("  Linking may still be in progress — verify later with /heartbeat.")
+        return True
+
+    print(f"  Linked accounts: {', '.join(accounts)}")
+    if phone and phone not in accounts:
+        print(f"  ⚠ Your configured number ({phone}) doesn't match the linked account.")
+        print("    Check SIGNAL_PHONE_NUMBER in .env matches the linked Signal number.")
+    return True
+
+
+# ── main ──────────────────────────────────────────────────────────
+
+def main():
+    # Keep print() output in order even when stdout is piped/redirected,
+    # so it doesn't interleave with Docker's (unbuffered) subprocess output.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+
+    print()
+    print("=" * 60)
+    print("  Ollama Signal Bot — setup")
+    print("=" * 60)
+
+    compose = check_prerequisites()
+    if not compose:
+        sys.exit(1)
+
+    # Ollama: use the host's, or run one in Docker
+    print()
+    print("== Ollama ==")
+    host_ollama = detect_host_ollama()
+    use_docker_ollama = True
+    if host_ollama:
+        print("  Detected Ollama running at localhost:11434.")
+        if confirm("  Use your existing Ollama (recommended)?"):
+            use_docker_ollama = False
+
+    if use_docker_ollama:
+        ollama_url = OLLAMA_DOCKER_URL
+        profile = ["--profile", "ollama"]
+        print("  Will run Ollama in Docker (CPU by default — see readme for GPU).")
+    else:
+        ollama_url = OLLAMA_HOST_FROM_DOCKER
+        profile = []
+        print("  Using your host's Ollama.")
+
+    # Configuration (pre-fill from an existing .env if present)
+    existing = read_env(".env")
+    values = configure(existing)
+    write_env(values, ollama_url)
+
+    model = values["OLLAMA_MODEL"]
+
+    # Build the bot image
+    print()
+    print("== Building ==")
+    if run(compose + ["build"]) != 0:
+        print("  ✗ Build failed")
+        sys.exit(1)
+
+    # Start Signal API (and Ollama if bundled)
+    print()
+    print("== Starting services ==")
+    if run(compose + profile + ["up", "-d", "signal-api"]) != 0:
+        print("  ✗ Failed to start Signal API")
+        sys.exit(1)
+    if not wait_for_signal_api():
+        sys.exit(1)
+
+    if use_docker_ollama:
+        if run(compose + profile + ["up", "-d", "ollama"]) != 0:
+            print("  ✗ Failed to start Ollama")
+            sys.exit(1)
+        if not wait_for_ollama():
+            sys.exit(1)
+
+    # Link the Signal account
+    link_device(values["SIGNAL_PHONE_NUMBER"])
+
+    # Pull the model (Docker Ollama only)
+    if use_docker_ollama and model:
+        print()
+        print(f"== Pulling model '{model}' ==")
+        run(compose + profile + ["exec", "-T", "ollama", "ollama", "pull", model])
+
+    # Start the bot (and everything else)
+    print()
+    print("== Starting the bot ==")
+    if run(compose + profile + ["up", "-d"]) != 0:
+        print("  ✗ Failed to start the stack")
+        sys.exit(1)
+
+    print()
+    print("=" * 60)
+    print("  ✓ Setup complete!")
+    print()
+    print("  The bot is now running and polling for messages.")
+    print("  View logs:  " + " ".join(compose) + " logs -f ollama-signal-bot")
+    print("  Stop it:    " + " ".join(compose) + " down")
+    print("=" * 60)
+    print()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nAborted.")
+        sys.exit(130)

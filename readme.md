@@ -1,316 +1,222 @@
 # 🤖 Ollama Signal Bot
 
-A self-hosted Signal messaging bot that forwards your messages to an [Ollama](https://ollama.com) server and returns AI-powered responses. Built on [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) and fully containerized with Docker.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED.svg?logo=docker&logoColor=white)](https://docs.docker.com/get-docker/)
+[![CI](https://github.com/kasp0r/ollama-signal-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/kasp0r/ollama-signal-bot/actions/workflows/ci.yml)
 
-> [!IMPORTANT]
-> **Attribution:** This project relies on the excellent work of [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) for Signal communication and [Ollama](https://ollama.com) for local LLM inference.
+A self-hosted Signal bot that forwards your messages to a local [Ollama](https://ollama.com) model and replies with AI-generated answers — privately. No cloud APIs, no subscriptions, and no data leaves your network. Built on [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) and containerized with Docker.
+
+<p align="center">
+  <img src="./asset/screenshot.jpeg" width="270" alt="Ollama Signal Bot replying from an Android phone">
+</p>
 
 > [!TIP]
-> **Recommended Setup:** It is highly recommended to configure this bot with a **separate mobile number** dedicated to the bot's identity. This ensures your personal Signal account remains unaffected.
-
-Send a message from Signal, get a response from your local LLM — privately, with no cloud APIs, no subscriptions, and no data leaving your network.
-
-<img src="./asset/screenshot.jpeg" width="270" alt="Screenshot from Android">
-
-**[📹 Watch a demo video](./asset/ollama-signal-bot-demo-android.mp4)**
-
-> [!NOTE]
-> While this application has been tested predominantly with the `gemma4:latest` model from Ollama, **all models** are expected to work correctly.
-
-## 🤔 Why This Approach?
-
-There are existing Signal bot frameworks (like Clawbot/OpenClaw) that abstract the Signal protocol, but this project intentionally uses a direct **signal-cli-rest-api + Ollama** architecture:
-
-| Approach | This Project (Direct)                                                            | Clawbot/OpenClaw (Framework) |
-|----------|----------------------------------------------------------------------------------|------------------------------|
-| **Privacy** | ✅ No middleware; self-hosted; messages go from Signal → your code → local LLM    | ⚠️ Often relies on cloud relays or third-party bridges |
-| **Control** | ✅ Full access to Signal CLI features; customize polling, retries, error handling | ⚠️ Limited to framework's abstraction layer |
-| **LLM Flexibility** | ✅ Native Ollama integration; any local model, no API keys                        | ⚠️ Usually tied to OpenAI/Claude APIs; local LLM support varies |
-| **Deployment** | ✅ Fully containerized; runs entirely offline                                     | ⚠️ Often requires external webhooks or cloud dependencies |
-| **Setup Complexity** | ❌ Manual Signal linking required; more initial configuration                     | ✅ Often simpler onboarding with hosted solutions |
-| **Maintenance** | ❌ You own the integration; updates depend on signal-cli-rest-api                 | ✅ Framework handles protocol updates |
-
-## ✨ Features
-
-- 💬 **Conversational AI** — Chat with any Ollama model directly from Signal
-- 🧠 **Conversation memory** — Per-user chat history with configurable depth
-- 🔄 **Model switching** — Change models on the fly via slash commands
-- 📊 **Telemetry mode** — View token counts, speed, and timing per response
-- 🔒 **Sender allowlist** — Restrict access to specific phone numbers
-- 🐳 **Docker containerized** — One-command deployment
-- 📡 **Auto-detection** — Automatically finds available Ollama models at startup
-
-## 🔒 Privacy & Data Flow
+> Use a **separate phone number** dedicated to the bot, so your personal Signal account stays untouched.
 
 > [!IMPORTANT]
-> **Privacy Disclaimer:** This bot is designed for users who want **complete data sovereignty**. However, understanding exactly how your data moves is crucial for maintaining Signal's privacy guarantees. The containerisation and architecture used by user for OSB will affect privacy.
+> **Attribution:** This project is built on [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) (GPL-3.0) and [Ollama](https://ollama.com) (MIT). See [NOTICE](NOTICE) for full license details.
 
-### Data Flows
+## Table of contents
 
-1. **Signal → signal-cli-rest-api**: Messages travel via Signal's standard end-to-end encryption (E2EE). The REST API decrypts them **locally** using your linked device's keys. Your messages are never decrypted on any remote server.
-2. **signal-cli-rest-api → Bot**: Plaintext messages travel over **localhost HTTP** (Docker internal network only). This stays within your machine.
-3. **Bot → Ollama**: Prompts are sent via **HTTP to your specified Ollama URL** (typically `localhost` or your LAN). No internet connection required if Ollama is local.
-
-### What Data is Stored
-
-| Data | Location                   | Retention               | Notes                                                          |
-|------|----------------------------|-------------------------|----------------------------------------------------------------|
-| **Conversation History** | In-memory (Python dict)    | Until bot restart or `/reset` | Never written to disk                                          |
-| **Signal Keys** | `./signald-config/` volume | Persistent              | Required for Signal protocol                                   |
-| **Phone Numbers** | `.env` allowlist, logs     | Persistent              | For access control; logged                                     |
-| **Message Content** | In-memory | Until restart or /reset | Not written to disk by the bot; exists in conversation history |
-
-
-## 📋 Table of Contents
-
-- [Prerequisites](#prerequisites)
-- [Signal Setup (Dedicated Number)](#signal-setup-dedicated-number)
-- [Ollama Setup](#ollama-setup)
-- [Installation](#installation)
+- [Features](#features)
+- [Setup](#setup)
+- [Dedicated Signal number](#dedicated-signal-number)
 - [Configuration](#configuration)
-- [Running the Bot](#running-the-bot)
-- [Bot Commands](#bot-commands)
-- [Architecture](#architecture)
+- [Managing the bot](#managing-the-bot)
+- [Web UI](#web-ui)
+- [Bot commands](#bot-commands)
+- [How it works](#how-it-works)
+- [Privacy](#privacy)
+- [Security](#security)
 - [Troubleshooting](#troubleshooting)
-- [License](#license)
-- [Alternative Projects](#alternative-projects)
+- [Attribution & license](#attribution--license)
+- [Alternative projects](#alternative-projects)
 
-## Prerequisites
+## Features
 
-| Requirement | Purpose |
-|---|---|
-| [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/) | Runs the bot and Signal API containers |
-| [Ollama](https://ollama.com) | Local LLM inference server |
-| [Python 3.10+](https://www.python.org/) | Runs the one-time Signal linking setup script |
-| A **dedicated Signal phone number** | The bot's identity on Signal (see below) |
-| A **primary Signal account** on your phone | Used to link the bot as a secondary device |
+- 💬 **Conversational AI** — chat with any Ollama model from Signal
+- 🧠 **Conversation memory** — per-user history with configurable depth
+- 🔄 **Model switching** — change models on the fly via slash commands
+- 📊 **Telemetry mode** — token counts, speed, and timing per response
+- 🔒 **Sender allowlist** — restrict access to specific numbers
+- 📡 **Auto-detection** — finds available Ollama models at startup
+- 🖥️ **Web UI** — configure the bot at runtime from a browser
 
-## Signal Setup (Dedicated Number)
+## Setup
 
-The bot needs its own phone number registered with Signal. **This is a separate number from your personal Signal account.** You will link the bot to this number as a secondary device (like Signal Desktop).
+### Prerequisites
 
-### Why a dedicated number?
+- [Docker](https://docs.docker.com/get-docker/) + Docker Compose
+- A **Signal number** to use for the bot (a dedicated one is recommended — see [Dedicated Signal number](#dedicated-signal-number))
+- [Ollama](https://ollama.com) — optional; the bot can run a bundled one instead
+- Python 3.10+ — only needed if you use the `setup.py` helper (not required for the web UI path)
 
-Your personal Signal number stays on your phone. The bot runs as a *linked device* on a second number. When someone messages the bot's number, it receives and responds automatically.
-
-### Getting a second Signal number (Android)
-
-1. **Get a second phone number:**
-   - Use a secondary SIM card, eSIM, or a VoIP number that can receive SMS (for initial Signal registration only)
-
-2. **Install a second copy of Signal using App Cloner (Android):**
-   - Install [App Cloner](https://appcloner.app/) on your Android device
-   - Open App Cloner and select **Signal** from your app list
-   - Tap **Clone** — this creates an independent second copy of Signal
-   - Open the cloned Signal app and register it with your **second phone number**
-   - Complete SMS verification as normal
-
-3. **Verify it works:**
-   - Send a test message between your primary Signal and the cloned Signal to confirm both accounts are functional
-
-> **Alternative (iOS / no App Cloner):** Use a second device (old phone, tablet) with a separate number to install Signal. Or use a VoIP service that supports SMS verification.
-
-### Important notes
-
-- The bot's phone number must have Signal **already registered and active**
-- The bot links as a secondary device — your cloned Signal app remains the primary
-- The cloned app must stay installed (the bot is a linked device to it)
-
-## Ollama Setup
-
-The bot connects to an Ollama server to generate responses. Ollama must be running and accessible from the machine where Docker is running.
-
-### Install Ollama
-
-Follow the instructions at [ollama.com](https://ollama.com) for your platform.
-
-### Pull a model
+### 1. Clone the repository
 
 ```bash
-# Pull a model (e.g., Gemma 4)
-ollama pull gemma4:latest
-
-# Or any other model
-ollama pull llama3.2:latest
-ollama pull mistral:latest
+git clone https://github.com/kasp0r/ollama-signal-bot.git
+cd ollama-signal-bot
 ```
 
-### Verify Ollama is running
+### 2. Configure (optional)
+
+Most settings have sensible defaults and can be changed later in the web UI.
+To set any upfront, copy the example env file and edit it:
 
 ```bash
-curl http://localhost:11434/api/tags
+cp .env.example .env
 ```
 
-You should see a JSON response listing your downloaded models.
+See [Configuration](#configuration) for the available variables.
 
-### Network accessibility
-
-If Ollama and the bot run on the same machine, the default `http://host.docker.internal:11434` works on Docker Desktop (Windows/macOS). On Linux, use your machine's LAN IP instead:
+### 3. Start the stack
 
 ```bash
-OLLAMA_URL=http://192.168.1.100:11434
+docker compose up -d
 ```
 
-**Tip:** Ensure Ollama is bound to `0.0.0.0` (not just `127.0.0.1`) if accessing from Docker. Set `OLLAMA_HOST=0.0.0.0` in your Ollama environment.
+This starts `signal-api` and the bot. If you don't have Ollama installed, add
+`--profile ollama` to also start a bundled one:
 
-## Installation
+```bash
+docker compose up -d --profile ollama
+```
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/your-username/ollama-signal-bot.git
-   cd ollama-signal-bot
-   ```
+### 4. Open the web UI
 
-2. **Create your environment file**
-   ```bash
-   cp .env.example .env
-   ```
+The bot generates an access token and prints it to the logs:
 
-3. **Edit .env with your settings**
-   ```dotenv
-   # Your bot's Signal phone number (the cloned/second number)
-   SIGNAL_PHONE_NUMBER=+1234567890
+```bash
+docker compose logs ollama-signal-bot | grep "Web UI token"
+```
 
-   # Your Ollama server URL
-   OLLAMA_URL=http://192.168.1.100:11434
+Open **http://127.0.0.1:8000** in your browser and enter that token when prompted.
 
-   # Model to use (leave empty for auto-detection)
-   OLLAMA_MODEL=gemma4:latest
+### 5. Link your Signal account
 
-   # Custom system prompt
-   SYSTEM_PROMPT=You are a helpful assistant that answers questions concisely.
+In the web UI's **Overview** tab, scan the QR code with the Signal app on the
+bot's number (**Settings → Linked Devices → +**). The bot auto-detects the
+number and starts polling for messages.
 
-   # Access control (* = allow all, or comma-separated phone numbers)
-   ALLOWED_SENDERS=*
-   ```
+### 6. Configure the bot
 
-4. **Install Python dependencies (for the setup script)**
-   ```bash
-   pip install httpx python-dotenv
-   ```
+In the **Settings** tab, pick a model, set the system prompt, adjust the
+temperature and generation parameters, and manage the sender/admin allowlists.
+Changes apply immediately and persist across restarts.
+
+### 7. Test it
+
+Send a message to the bot's number from another Signal account. You should get
+an AI reply, and the **Overview** tab will show the activity.
+
+### Alternative: `python setup.py`
+
+Prefer a one-command, interactive setup? It detects Ollama, writes `.env`,
+builds the containers, and walks you through the QR link:
+
+```bash
+python setup.py
+```
+
+<p align="center">
+  <img src="./asset/demo.gif" width="360" alt="Animated demo of the Ollama Signal Bot">
+</p>
+
+**[📹 Watch the full demo video](./asset/ollama-signal-bot-demo-android.mp4)**
+
+## Dedicated Signal number
+
+The bot runs as a *linked device* on its own number (like Signal Desktop), so your personal account stays on your phone.
+
+1. **Get a second number** — a second SIM/eSIM, or a VoIP number that can receive SMS once for initial registration.
+2. **Install Signal on that number** — e.g. a spare device, or a cloned app on Android via [App Cloner](https://appcloner.app/).
+3. **Link the bot** — open the web UI (`http://127.0.0.1:8000`) and scan the QR code with the cloned app: **Settings → Linked Devices → +**. (Or run `python setup.py`, which does the same.)
+
+The app remains the primary device; the bot is linked to it and must stay installed.
 
 ## Configuration
 
-### Environment Variables
+Most configuration is done in the **web UI** (Settings tab) and persists across restarts. For initial defaults, copy `.env.example` to `.env` and edit it:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `SIGNAL_PHONE_NUMBER` | Yes | — | The bot's Signal phone number (with country code, e.g. +1234567890) |
-| `OLLAMA_URL` | No | `http://host.docker.internal:11434` | URL of your Ollama server |
-| `OLLAMA_MODEL` | No | (auto-detect) | Ollama model name (e.g. `gemma4:latest`). If empty or invalid, the bot picks the first available model. |
-| `SYSTEM_PROMPT` | No | You are a helpful assistant. | System prompt sent with every conversation |
-| `ALLOWED_SENDERS` | No | `*` | Comma-separated phone numbers, or `*` to allow everyone |
+| `SIGNAL_PHONE_NUMBER` | No | auto-detect | The bot's Signal number (auto-detected after linking) |
+| `OLLAMA_URL` | No | `http://ollama:11434` | Ollama URL (see below) |
+| `OLLAMA_MODEL` | No | auto-detect | Model name (e.g. `gemma4:latest`) |
+| `OLLAMA_TEMPERATURE` | No | `0.7` | Sampling temperature (0.0-1.0) |
+| `SYSTEM_PROMPT` | No | `You are a helpful assistant.` | System prompt for every reply |
+| `ALLOWED_SENDERS` | No | `*` | `*` = everyone, or comma-separated numbers |
+| `ALLOWED_ADMINS` | No | `*` | Who can run admin commands (`*` = everyone, or numbers) |
+| `WEBUI_TOKEN` | No | (none) | Secret required to use the web UI (empty = no auth) |
+| `WEBUI_PORT` | No | `8000` | Host port for the web UI |
 
-### Allowed Senders
+### Ollama: Docker or your own?
 
-Control who can message the bot:
-
-```dotenv
-# Allow everyone (default)
-ALLOWED_SENDERS=*
-
-# Single user
-ALLOWED_SENDERS=+15551234567
-
-# Multiple users
-ALLOWED_SENDERS=+15551234567,+15559876543
-```
-
-Unauthorized senders receive a denial message and are logged.
-
-## Running the Bot
-
-### Step 1: Build and start the Signal API
-
-Before running the Signal API, ensure you have created your `.env` file (see Configuration above).
+By default the bot uses a **bundled Ollama** (`http://ollama:11434`) — nothing to install. Pull models into it with:
 
 ```bash
-docker-compose build
-docker-compose up -d signal-api
+docker compose --profile ollama exec ollama ollama pull gemma4:latest
 ```
 
-Wait a few seconds for the Signal API to initialize.
+If you already run Ollama, `setup.py` detects it and switches to `http://host.docker.internal:11434` automatically (this works on Linux, macOS, and Windows). You then manage models with your normal `ollama pull` command.
 
-### Step 2: Link your Signal account
+> **GPU:** the bundled Ollama runs on CPU by default. To use your NVIDIA GPU, uncomment the `deploy` block in `docker-compose.yml`.
 
-You can run the setup script either locally or inside the Docker container (after Step 3).
-
-**Option A: Local execution (Recommended)**
-```bash
-python signal-setup.py
-```
-
-**Option B: Docker execution**
-```bash
-docker-compose run --rm ollama-signal-bot python signal-setup.py
-```
-
-This interactive script will:
-- Connect to the Signal API
-- Generate a QR code URL
-- Prompt you to scan it from the cloned Signal app on your phone
-
-**To scan the QR code:**
-1. Open the QR code URL in your browser
-2. On the cloned Signal app → **Settings** → **Linked Devices** → tap **+**
-3. Scan the QR code displayed in your browser
-4. Press **Enter** in the setup script to confirm
-
-### Step 3: Start the bot
+## Managing the bot
 
 ```bash
-docker-compose up -d
+docker compose logs -f ollama-signal-bot   # follow logs
+docker compose restart ollama-signal-bot    # restart the bot
+docker compose down                         # stop (add --profile ollama to stop bundled Ollama too)
+git pull && docker compose build && docker compose up -d   # update to the latest code
 ```
 
-### Step 4: Verify it's running
+`docker compose ps` shows a health status for the bot (healthy/unhealthy).
 
-```bash
-docker-compose logs -f ollama-signal-bot
+These commands are also available as `make` shortcuts — run `make` to list them all: `make up`, `make down`, `make logs`, `make restart`, `make test`, `make model-pull MODEL=...`, and more.
+
+## Web UI
+
+The bot serves a web UI for configuration and monitoring. Open it at:
+
+```
+http://127.0.0.1:8000
 ```
 
-You should see:
-```
-Bot is running — polling for messages... (model: gemma4:latest)
-```
+It shows the status of the bot and its dependencies (signal-api, Ollama, and
+the linked Signal account), lets you **link the account on first run** by
+scanning the QR code, and lets you change the model, temperature, system
+prompt, history limit, and allowlists — changes apply immediately and persist
+across restarts (stored in the `bot-data` volume).
 
-### Quick start scripts
+By default the UI is bound to `127.0.0.1` (localhost only). A random access
+token is generated at startup and printed to the logs (`docker compose logs
+ollama-signal-bot`). To use a fixed token instead, set `WEBUI_TOKEN` in `.env`.
 
-Windows (PowerShell):
-```powershell
-.\run.ps1
-```
+## Bot commands
 
-Linux/macOS:
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-These scripts handle building, starting, account detection, and log tailing automatically.
-
-## Bot Commands
-
-Send any of these as a message to the bot's Signal number:
+Send any of these to the bot's number (one-to-one chats only — group messages are ignored):
 
 | Command | Description |
 |---|---|
-| `/help` | Show all available commands |
-| `/heartbeat` | Show bot uptime, service status, and stats |
-| `/version` | Show Ollama server version |
-| `/list` | List all available models with sizes |
-| `/model` | Show the currently active model |
-| `/model <name>` | Switch to a different model |
-| `/ps` | List currently loaded/running models |
-| `/show <name>` | Show detailed info about a model |
+| `/help` | Show all commands |
+| `/heartbeat` | Uptime, service status, and stats |
+| `/version` | Ollama server version |
+| `/list` | List available models |
+| `/model` / `/model <name>` | Show / switch the active model |
+| `/ps` | List running models |
+| `/show <name>` | Model details |
 | `/reset` | Clear your conversation history |
-| `/history` | Show your conversation statistics |
-| `/maxhistory` | Show the current memory limit |
-| `/maxhistory <n>` | Set max conversation history to n message pairs |
-| `/verbose` | Toggle response telemetry (token counts, speed, timing) |
+| `/history` | Conversation stats |
+| `/recent` / `/recent <n>` | Show recent conversation messages |
+| `/maxhistory` / `/maxhistory <n>` | Show / set memory limit (pairs) |
+| `/verbose` | Toggle response telemetry |
+| `/config` | Show current settings |
 
-### Verbose mode example
+> **Admin-only:** `/model <name>`, `/maxhistory <n>`, and `/config` require the sender to be in `ALLOWED_ADMINS`.
 
-With `/verbose` enabled, each response includes:
+With `/verbose` enabled, each reply includes telemetry:
 
 ```
 ─── Telemetry ───
@@ -321,71 +227,62 @@ With `/verbose` enabled, each response includes:
   Total time: 1.61s
 ```
 
-## Architecture
+## How it works
 
 ```
-┌─────────────┐         ┌──────────────────┐         ┌────────────┐
-│   Signal     │  HTTP   │  signal-cli-     │  HTTP   │   Ollama   │
-│   Phone      │◄──────► │  rest-api        │◄──────► │   Signal   │
-│   (User)     │         │  (Docker)        │         │   Bot      │
-└─────────────┘         └──────────────────┘         │  (Docker)  │
-                                                      └─────┬──────┘
-                                                            │ HTTP
-                                                      ┌─────▼──────┐
-                                                      │   Ollama   │
-                                                      │   Server   │
-                                                      └────────────┘
+Signal app  ⇄  signal-cli-rest-api  ⇄  bot  ⇄  Ollama
+ (phone)        (Docker · decrypts)   (Docker)  (LLM)
 ```
 
-- **signal-cli-rest-api** — Bridges Signal's protocol to a REST API (port 18080 on host)
-- **ollama-signal-bot** — The Python bot that polls for messages and queries Ollama
-- **Ollama** — Your local LLM inference server (runs on the host or another machine)
+1. A message arrives via Signal's end-to-end encryption and is **decrypted locally** by signal-cli-rest-api using your linked device's keys.
+2. The bot polls the REST API (`http://localhost:18080`) for new messages.
+3. It sends the message (plus conversation history) to Ollama and returns the reply.
 
-### Signal API Dashboard
+## Privacy
 
-The Signal REST API has a built-in Swagger UI for debugging:
-```
-http://localhost:18080/v1/about
-```
+- Messages are decrypted on your machine only; plaintext travels over the **local Docker network** and never touches the internet.
+- **Conversation history is stored in a local SQLite database** (`history.db` in the `bot-data` volume) — it persists across restarts but stays on your machine.
+- The only persisted data is your Signal device keys (`signal-cli-data` volume), the conversation history, and the Ollama model files.
+
+## Security
+
+- **Localhost-only ports** — the Signal API and Ollama bind to `127.0.0.1`, so they're not exposed to your LAN.
+- **Sender allowlist** (`ALLOWED_SENDERS`) — controls who can message the bot.
+- **Admin allowlist** (`ALLOWED_ADMINS`) — controls who can change models, limits, and view config.
+- **Rate limiting** — 10 messages per minute per sender.
+- **Message length caps** — prompts and responses are truncated to avoid abuse.
+- **Non-root container** — the bot runs as an unprivileged user.
 
 ## Troubleshooting
 
-- **Bot can't reach Ollama**
-  - Ensure `OLLAMA_URL` in `.env` uses an IP accessible from inside Docker
-  - On Linux, use your LAN IP — `host.docker.internal` only works on Docker Desktop
-  - Check Ollama is bound to `0.0.0.0`: set `OLLAMA_HOST=0.0.0.0` before starting Ollama
-- **"Receive failed (account not registered?)"**
-  - Run `python signal-setup.py` and complete the linking process
-  - Ensure the cloned Signal app is still installed and the linked device wasn't removed
-- **Bot responds with "No model is currently loaded"**
-  - Pull a model: `ollama pull gemma4:latest`
-  - Or set a valid model in `.env` and restart: `docker-compose restart ollama-signal-bot`
-- **Port 18080 already in use**
-  - Change the host port in `docker-compose.yml`: `"19080:8080"` (and update `signal-setup.py` and `run.ps1`/`run.sh` accordingly)
-- **Messages not being received**
-  - Check logs: `docker-compose logs -f ollama-signal-bot`
-  - Verify the Signal API is healthy: `curl http://localhost:18080/v1/about`
-  - Ensure your `SIGNAL_PHONE_NUMBER` matches the linked account
+| Problem | Fix |
+|---|---|
+| Bot can't reach Ollama | Check `OLLAMA_URL` in `.env`. Use `host.docker.internal:11434` (host Ollama) or `http://ollama:11434` (bundled). |
+| `Receive failed (account not registered?)` | Re-run `python setup.py` and complete the QR linking; ensure the cloned Signal app is still installed. |
+| `No model is currently loaded` | Pull a model: `ollama pull gemma4:latest` (or `docker compose --profile ollama exec ollama ollama pull ...`). |
+| Port 18080 in use | Change the host port in `docker-compose.yml` (e.g. `"19080:8080"`), then set `SIGNAL_API_URL=http://localhost:19080` when linking. |
+| Messages not received | `docker compose logs -f ollama-signal-bot` and check `http://localhost:18080/v1/about`. |
 
-## License
+## Attribution & license
 
-MIT License — see [LICENSE](LICENSE) for details.
+- [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) — **GPL-3.0**
+- [Ollama](https://ollama.com) — **MIT**
+- Python dependencies (`httpx`, `python-dotenv`) — **BSD-3-Clause**
 
-## Alternative Projects
+See [NOTICE](NOTICE) for full details. This project itself is licensed under the [MIT License](LICENSE).
 
-If this project doesn't quite fit your needs, here are other excellent Signal + Ollama/LLM integrations worth exploring:
+## Alternative projects
 
-| Project | Description | Key Features |
-|---------|-------------|--------------|
-| [**Signallama**](https://github.com/aljazceru/signallama) | Dedicated Signal bot for Ollama chat | Direct Signal-to-Ollama interface, focused simplicity |
-| [**uoltz**](https://github.com/maciejjedrzejczyk/uoltz) | Local-first AI chatbot for Signal | Pluggable skills, voice transcription, multi-agent orchestration |
-| [**Signal-to-Ollama Bridge**](https://github.com/asynchronous-x/signal-to-ollama-bridge) | Minimal Express.js bridge service | Emoji reactions, conversation context tracking, lightweight |
-| [**Clawdbot/OpenClaw**](https://github.com/OpenClaw) | Multi-platform bot framework | Supports Signal, WhatsApp, Telegram; Ollama local provider support |
-| [**Signal Bot Crawly**](https://github.com/hajekad/signal-bot-crawly) | Rust-based Signal ↔ Open WebUI bridge | Group chat support, summarization, web search integration |
-
-
+| Project | Highlights |
+|---|---|
+| [Signallama](https://github.com/aljazceru/signallama) | Simple dedicated Signal ↔ Ollama chat |
+| [uoltz](https://github.com/maciejjedrzejczyk/uoltz) | Local-first bot with skills & voice |
+| [Signal-to-Ollama Bridge](https://github.com/asynchronous-x/signal-to-ollama-bridge) | Minimal Express.js bridge |
+| [Clawdbot/OpenClaw](https://github.com/OpenClaw) | Multi-platform framework |
+| [Signal Bot Crawly](https://github.com/hajekad/signal-bot-crawly) | Rust, groups & summarization |
 
 ---
 
-**Author:** Rudi Ball  
-Built with Ollama, signal-cli-rest-api, and Python.
+**Author:** Rudi Ball
+
+See [CHANGELOG.md](CHANGELOG.md) for a full history of changes.

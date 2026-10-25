@@ -6,15 +6,22 @@ Supports conversation memory and slash commands.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
+import secrets
+import signal
+import sqlite3
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
+
+import webui
 
 load_dotenv()
 
@@ -28,6 +35,60 @@ logger = logging.getLogger(__name__)
 # Maximum conversation history per user (number of message pairs)
 MAX_HISTORY = 50
 START_TIME = datetime.now(timezone.utc)
+
+# Security limits
+MAX_INPUT_LENGTH = 4000       # max chars of a user message sent to Ollama
+MAX_OUTPUT_LENGTH = 4000      # max chars of a model response returned to Signal
+MAX_OUTPUT_TOKENS = 1024      # Ollama num_predict (max generated tokens)
+DEFAULT_TEMPERATURE = 0.7     # Ollama sampling temperature
+DEFAULT_TOP_P = 0.9           # Ollama nucleus sampling
+DEFAULT_TOP_K = 40            # Ollama top-k sampling
+RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
+RATE_LIMIT_WINDOW_SECONDS = 60
+HEARTBEAT_FILE = "/tmp/ollama-signal-bot.heartbeat"
+CONFIG_FILE = "/app/data/config.json"
+HISTORY_DB_FILE = "/app/data/history.db"
+WEBUI_TOKEN_FILE = "/app/data/webui-token"
+WEBUI_PORT = 8000  # internal web UI port (host mapping set in docker-compose.yml)
+
+
+def _touch_heartbeat() -> None:
+    """Update the heartbeat file's mtime to signal the bot is still alive."""
+    try:
+        with open(HEARTBEAT_FILE, "w") as f:
+            f.write(".")
+    except OSError:
+        pass
+
+
+def _resolve_webui_token() -> str:
+    """Return the web UI token, auto-generating one if none is configured.
+
+    If WEBUI_TOKEN is set, it is used as-is (and not logged). Otherwise a
+    random token is generated once, persisted to the data volume so it survives
+    restarts, and logged so the user can find it in `docker logs`.
+    """
+    token = os.getenv("WEBUI_TOKEN", "")
+    if token:
+        return token
+
+    try:
+        with open(WEBUI_TOKEN_FILE, encoding="utf-8") as f:
+            token = f.read().strip()
+    except FileNotFoundError:
+        token = ""
+
+    if not token:
+        token = secrets.token_urlsafe(32)
+        try:
+            os.makedirs(os.path.dirname(WEBUI_TOKEN_FILE), exist_ok=True)
+            with open(WEBUI_TOKEN_FILE, "w", encoding="utf-8") as f:
+                f.write(token)
+        except OSError as exc:
+            logger.warning(f"Could not persist web UI token: {exc}")
+
+    logger.info(f"Web UI token: {token}")
+    return token
 
 def format_for_signal(text: str) -> str:
     """
@@ -67,11 +128,12 @@ def format_for_signal(text: str) -> str:
     # Ordered lists: clean up but keep numbers
     text = re.sub(r"^(\s*)\d+\.\s+", r"\1", text, flags=re.MULTILINE)
 
+    # Images: ![alt](url) → [Image: alt]  (must run before links,
+    # otherwise the link pattern consumes [alt](url) and leaves "!alt").
+    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"[Image: \1]", text)
+
     # Links: [text](url) → text (url)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
-
-    # Images: ![alt](url) → [Image: alt]
-    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"[Image: \1]", text)
 
     # Blockquotes: > text → │ text
     text = re.sub(r"^>\s?", "│ ", text, flags=re.MULTILINE)
@@ -88,20 +150,35 @@ class OllamaSignalBot:
 
     def __init__(
         self,
-        phone_number: str,
-        signal_api_url: str,
-        ollama_url: str,
+        phone_number: str = "",
+        signal_api_url: str = "http://signal-api:8080",
+        ollama_url: str = "http://ollama:11434",
         ollama_model: str = "gemma4:latest",
         system_prompt: str = "You are a helpful assistant.",
         allowed_senders: str = "*",
+        allowed_admins: str = "*",
+        temperature: float = DEFAULT_TEMPERATURE,
+        num_predict: int = MAX_OUTPUT_TOKENS,
+        top_p: float = DEFAULT_TOP_P,
+        top_k: int = DEFAULT_TOP_K,
+        config_file: str = CONFIG_FILE,
+        history_db_file: str = HISTORY_DB_FILE,
     ):
         self.phone_number = phone_number
         self.signal_api_url = signal_api_url.rstrip("/")
         self.ollama_url = ollama_url.rstrip("/")
         self.ollama_model = ollama_model
         self.system_prompt = system_prompt
+        self.temperature = temperature
+        self.num_predict = num_predict
+        self.top_p = top_p
+        self.top_k = top_k
         self.client = httpx.AsyncClient(timeout=180.0)
         self.max_history = MAX_HISTORY
+        self.config_file = config_file
+        self.history_db_file = history_db_file
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
         # Sender allowlist: "*" means allow everyone, otherwise a set of phone numbers
         if allowed_senders.strip() == "*" or not allowed_senders.strip():
@@ -111,12 +188,43 @@ class OllamaSignalBot:
             self.allowed_senders = {s.strip() for s in allowed_senders.split(",") if s.strip()}
             logger.info(f"Sender allowlist: {self.allowed_senders}")
 
+        # Admin allowlist: "*" means every allowed sender is an admin,
+        # otherwise a subset of phone numbers who may run privileged commands.
+        if allowed_admins.strip() == "*" or not allowed_admins.strip():
+            self.allowed_admins: set[str] | None = None  # None = everyone is admin
+            logger.info("Admin allowlist: OPEN (every sender is an admin)")
+        else:
+            self.allowed_admins = {s.strip() for s in allowed_admins.split(",") if s.strip()}
+            logger.info(f"Admin allowlist: {self.allowed_admins}")
+
         # Per-user conversation history: { sender: [{"role": ..., "content": ...}, ...] }
         self.conversations: dict[str, list[dict]] = defaultdict(list)
         # Per-user verbose mode (off by default)
         self.verbose_users: set[str] = set()
+        # Per-sender message timestamps for rate limiting
+        self._message_times: dict[str, list[float]] = defaultdict(list)
+        # Last received message (for status/monitoring)
+        self.last_message_at: datetime | None = None
+        self.last_message_sender: str | None = None
 
-        logger.info(f"Bot phone number: {phone_number}")
+        self._init_db()
+
+        # Snapshot of the initial (env/default) config, for "reset to defaults".
+        self._initial_config = {
+            "ollama_model": self.ollama_model,
+            "signal_api_url": self.signal_api_url,
+            "ollama_url": self.ollama_url,
+            "temperature": self.temperature,
+            "num_predict": self.num_predict,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "system_prompt": self.system_prompt,
+            "max_history": self.max_history,
+            "allowed_senders": self._senders_to_str(self.allowed_senders),
+            "allowed_admins": self._senders_to_str(self.allowed_admins),
+        }
+
+        logger.info(f"Bot phone number: {phone_number or '(auto-detect)'}")
         logger.info(f"Signal API: {signal_api_url}")
         logger.info(f"Ollama: {ollama_url} (model: {ollama_model})")
 
@@ -127,6 +235,289 @@ class OllamaSignalBot:
         if self.allowed_senders is None:
             return True
         return sender in self.allowed_senders
+
+    def is_admin(self, sender: str) -> bool:
+        """Check if a sender may run privileged (admin) commands."""
+        if self.allowed_admins is None:
+            return True
+        return sender in self.allowed_admins
+
+    def is_rate_limited(self, sender: str) -> bool:
+        """Enforce a per-sender sliding-window rate limit.
+
+        Returns True if the sender should be throttled; otherwise records
+        the message and returns False.
+        """
+        now = time.monotonic()
+        recent = [
+            t for t in self._message_times[sender]
+            if now - t < RATE_LIMIT_WINDOW_SECONDS
+        ]
+        self._message_times[sender] = recent
+        if len(recent) >= RATE_LIMIT_MESSAGES:
+            return True
+        recent.append(now)
+        return False
+
+    # ── Runtime configuration ───────────────────────────────────────
+
+    def _senders_to_str(self, senders) -> str:
+        if senders is None:
+            return "*"
+        return ",".join(sorted(senders))
+
+    def _str_to_senders(self, value):
+        value = str(value).strip()
+        if value == "*" or not value:
+            return None
+        return {s.strip() for s in value.split(",") if s.strip()}
+
+    def _apply_config(self, config: dict) -> None:
+        """Apply a config dict to in-memory state (no validation/persistence)."""
+        if "ollama_model" in config:
+            self.ollama_model = str(config["ollama_model"]).strip()
+        if "signal_api_url" in config:
+            self.signal_api_url = str(config["signal_api_url"]).strip().rstrip("/")
+        if "ollama_url" in config:
+            self.ollama_url = str(config["ollama_url"]).strip().rstrip("/")
+        if "temperature" in config:
+            self.temperature = float(config["temperature"])
+        if "num_predict" in config:
+            self.num_predict = int(config["num_predict"])
+        if "top_p" in config:
+            self.top_p = float(config["top_p"])
+        if "top_k" in config:
+            self.top_k = int(config["top_k"])
+        if "system_prompt" in config:
+            self.system_prompt = str(config["system_prompt"])
+        if "max_history" in config:
+            self.max_history = int(config["max_history"])
+        if "allowed_senders" in config:
+            self.allowed_senders = self._str_to_senders(config["allowed_senders"])
+        if "allowed_admins" in config:
+            self.allowed_admins = self._str_to_senders(config["allowed_admins"])
+
+    def get_runtime_config(self) -> dict:
+        """Return the runtime-mutable settings as a JSON-serializable dict."""
+        return {
+            "ollama_model": self.ollama_model,
+            "signal_api_url": self.signal_api_url,
+            "ollama_url": self.ollama_url,
+            "temperature": self.temperature,
+            "num_predict": self.num_predict,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "system_prompt": self.system_prompt,
+            "max_history": self.max_history,
+            "allowed_senders": self._senders_to_str(self.allowed_senders),
+            "allowed_admins": self._senders_to_str(self.allowed_admins),
+        }
+
+    def apply_runtime_config(self, config: dict) -> None:
+        """Validate, apply, and persist runtime-mutable settings."""
+        if "temperature" in config:
+            t = float(config["temperature"])
+            if not 0.0 <= t <= 2.0:
+                raise ValueError("temperature must be between 0.0 and 2.0")
+        if "num_predict" in config:
+            n = int(config["num_predict"])
+            if n < 1:
+                raise ValueError("num_predict must be at least 1")
+        if "top_p" in config:
+            p = float(config["top_p"])
+            if not 0.0 < p <= 1.0:
+                raise ValueError("top_p must be between 0.0 and 1.0")
+        if "top_k" in config:
+            k = int(config["top_k"])
+            if k < 1:
+                raise ValueError("top_k must be at least 1")
+        if "max_history" in config:
+            n = int(config["max_history"])
+            if n < 1:
+                raise ValueError("max_history must be at least 1")
+        if "signal_api_url" in config:
+            url = str(config["signal_api_url"]).strip()
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("Signal API URL must start with http:// or https://")
+        if "ollama_url" in config:
+            url = str(config["ollama_url"]).strip()
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("Ollama URL must start with http:// or https://")
+        self._apply_config(config)
+        self.save_runtime_config()
+
+    def save_runtime_config(self) -> None:
+        """Persist the current runtime-mutable settings to disk."""
+        try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(self.get_runtime_config(), f, indent=2)
+        except OSError as e:
+            logger.warning(f"Could not persist runtime config: {e}")
+
+    def load_runtime_config(self) -> None:
+        """Load persisted runtime settings, overriding env defaults."""
+        try:
+            with open(self.config_file, encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        # Skip blank string values so a stale/empty config can't wipe env defaults.
+        data = {k: v for k, v in data.items() if not (isinstance(v, str) and not v.strip())}
+        try:
+            self._apply_config(data)
+        except (ValueError, TypeError):
+            logger.warning("Ignoring invalid persisted runtime config")
+
+    def reset_runtime_config(self) -> None:
+        """Reset runtime settings to their initial (env/default) values."""
+        self._apply_config(self._initial_config)
+        try:
+            os.remove(self.config_file)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning(f"Could not remove persisted config: {exc}")
+        logger.info("Runtime configuration reset to defaults")
+
+    def get_status(self) -> dict:
+        """Return a small status snapshot for the web UI."""
+        uptime = datetime.now(timezone.utc) - START_TIME
+        return {
+            "model": self.ollama_model or None,
+            "uptime_seconds": int(uptime.total_seconds()),
+            "active_chats": sum(1 for v in self.conversations.values() if v),
+            "messages_in_memory": sum(len(v) for v in self.conversations.values()),
+            "last_message_at": self.last_message_at.isoformat() if self.last_message_at else None,
+            "last_message_sender": self.last_message_sender,
+        }
+
+    # ── History persistence & stats ─────────────────────────────────
+
+    def _init_db(self) -> None:
+        """Initialize the SQLite history database and load existing history."""
+        self.db = None
+        try:
+            if self.history_db_file == ":memory:":
+                self.db = sqlite3.connect(":memory:", check_same_thread=False)
+            else:
+                os.makedirs(os.path.dirname(self.history_db_file), exist_ok=True)
+                self.db = sqlite3.connect(self.history_db_file, check_same_thread=False)
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS messages ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "sender TEXT NOT NULL, "
+                "role TEXT NOT NULL, "
+                "content TEXT NOT NULL, "
+                "created_at TEXT NOT NULL)"
+            )
+            self.db.execute("CREATE INDEX IF NOT EXISTS idx_sender ON messages(sender)")
+            self.db.commit()
+            self._load_history()
+        except (OSError, sqlite3.Error) as exc:
+            logger.warning(f"Could not initialize history DB; using in-memory only: {exc}")
+            self.db = None
+
+    def _load_history(self) -> None:
+        """Load recent conversation history from the database into memory."""
+        if self.db is None:
+            return
+        try:
+            rows = self.db.execute(
+                "SELECT sender, role, content FROM messages ORDER BY id"
+            ).fetchall()
+        except sqlite3.Error:
+            return
+        for sender, role, content in rows:
+            self.conversations[sender].append({"role": role, "content": content})
+        for sender in list(self.conversations):
+            limit = self.max_history * 2
+            if len(self.conversations[sender]) > limit:
+                self.conversations[sender] = self.conversations[sender][-limit:]
+
+    def _persist_message(self, sender: str, role: str, content: str) -> None:
+        """Persist a message to the history DB (if available), pruning old ones."""
+        if self.db is None:
+            return
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            self.db.execute(
+                "INSERT INTO messages (sender, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (sender, role, content, now),
+            )
+            limit = self.max_history * 2
+            self.db.execute(
+                "DELETE FROM messages WHERE sender = ? AND id NOT IN ("
+                "SELECT id FROM messages WHERE sender = ? ORDER BY id DESC LIMIT ?)",
+                (sender, sender, limit),
+            )
+            self.db.commit()
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not persist message: {exc}")
+
+    def _clear_sender_db(self, sender: str) -> None:
+        """Remove a sender's history from the database."""
+        if self.db is None:
+            return
+        try:
+            self.db.execute("DELETE FROM messages WHERE sender = ?", (sender,))
+            self.db.commit()
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not clear history for {sender}: {exc}")
+
+    def clear_sender_history(self, sender: str) -> int:
+        """Clear a sender's conversation history. Returns the number cleared."""
+        count = len(self.conversations.get(sender, []))
+        self.conversations[sender].clear()
+        self._clear_sender_db(sender)
+        return count
+
+    def _clear_all_history(self) -> None:
+        """Clear all conversation history (in-memory and database)."""
+        self.conversations.clear()
+        if self.db is not None:
+            try:
+                self.db.execute("DELETE FROM messages")
+                self.db.commit()
+            except sqlite3.Error as exc:
+                logger.warning(f"Could not clear history DB: {exc}")
+
+    async def reset_all(self) -> bool:
+        """Reset the entire installation to a fresh state."""
+        if self.phone_number:
+            await self.unlink_account()
+        self._clear_all_history()
+        self.reset_runtime_config()
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        logger.info("Installation reset to a fresh state")
+        return True
+
+    def get_stats(self) -> dict:
+        """Return usage statistics."""
+        per_user = {}
+        if self.db is not None:
+            try:
+                rows = self.db.execute(
+                    "SELECT sender, COUNT(*) FROM messages GROUP BY sender"
+                ).fetchall()
+                per_user = {sender: {"messages": count} for sender, count in rows}
+            except sqlite3.Error:
+                per_user = {}
+        if not per_user:
+            per_user = {
+                sender: {"messages": len(msgs)}
+                for sender, msgs in self.conversations.items() if msgs
+            }
+        return {
+            "total_messages": sum(p["messages"] for p in per_user.values()),
+            "active_users": len(per_user),
+            "total_tokens_in": self.total_prompt_tokens,
+            "total_tokens_out": self.total_completion_tokens,
+            "per_user": per_user,
+        }
 
     # ── Ollama API helpers ──────────────────────────────────────────
 
@@ -141,8 +532,9 @@ class OllamaSignalBot:
             )
 
         try:
-            # Append user message to history
+            # Append user message to history (and persist)
             self.conversations[sender].append({"role": "user", "content": prompt})
+            self._persist_message(sender, "user", prompt)
 
             # Trim history if it exceeds the limit
             if len(self.conversations[sender]) > self.max_history * 2:
@@ -156,6 +548,12 @@ class OllamaSignalBot:
                     *self.conversations[sender],
                 ],
                 "stream": False,
+                "options": {
+                    "num_predict": self.num_predict,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": self.top_k,
+                },
             }
 
             logger.info(f"Querying Ollama ({self.ollama_model}) Prompt length: {len(prompt)}")
@@ -165,8 +563,17 @@ class OllamaSignalBot:
             result = response.json()
             answer = result.get("message", {}).get("content", "No response from model.")
 
-            # Append assistant response to history
+            # Track cumulative token usage for stats
+            self.total_prompt_tokens += result.get("prompt_eval_count", 0)
+            self.total_completion_tokens += result.get("eval_count", 0)
+
+            # Cap the response length to avoid flooding Signal
+            if len(answer) > MAX_OUTPUT_LENGTH:
+                answer = answer[:MAX_OUTPUT_LENGTH] + "…"
+
+            # Append assistant response to history (and persist)
             self.conversations[sender].append({"role": "assistant", "content": answer})
+            self._persist_message(sender, "assistant", answer)
 
             logger.info(f"Ollama response length: {len(answer)}")
 
@@ -248,7 +655,9 @@ class OllamaSignalBot:
             "/history — Show conversation stats\n"
             "/maxhistory — Show max history limit\n"
             "/maxhistory <n> — Set max history to n pairs\n"
-            "/verbose — Toggle telemetry on responses"
+            "/verbose — Toggle telemetry on responses\n"
+            "/recent — Show recent conversation messages\n"
+            "/config — Show current settings"
         )
 
     async def cmd_list(self, sender: str) -> str:
@@ -284,6 +693,9 @@ class OllamaSignalBot:
         if not args:
             return f"🤖 Current model: *{self.ollama_model}*"
 
+        if not self.is_admin(sender):
+            return "⛔ Only an admin can change the model."
+
         new_model = args.strip()
 
         # Verify model exists
@@ -304,8 +716,7 @@ class OllamaSignalBot:
 
     async def cmd_reset(self, sender: str) -> str:
         """Clear conversation history for the sender."""
-        msg_count = len(self.conversations[sender])
-        self.conversations[sender].clear()
+        msg_count = self.clear_sender_history(sender)
         logger.info(f"Conversation reset for {sender} ({msg_count} messages cleared)")
         return f"🗑️ Conversation cleared ({msg_count} messages removed)."
 
@@ -453,10 +864,64 @@ class OllamaSignalBot:
             f"  Memory limit: {self.max_history} pairs"
         )
 
+    async def cmd_recent(self, sender: str, args: str) -> str:
+        """Show the sender's most recent conversation messages."""
+        history = self.conversations[sender]
+        if not history:
+            return "📜 No conversation yet. Start chatting!"
+
+        n = 5
+        if args.strip():
+            try:
+                n = int(args.strip())
+            except ValueError:
+                return "⚠️ Please provide a valid number, e.g. /recent 10"
+            if n < 1:
+                return "⚠️ Number of messages must be at least 1."
+            n = min(n, 20)  # cap to avoid flooding
+
+        recent = history[-n:]
+        lines = [f"📜 Recent messages ({len(recent)}):"]
+        for m in recent:
+            role = "👤 You" if m["role"] == "user" else "🤖 Bot"
+            content = " ".join(m["content"].split())
+            if len(content) > 280:
+                content = content[:280] + "…"
+            lines.append(f"{role}: {content}")
+        return "\n\n".join(lines)
+
+    async def cmd_config(self, sender: str) -> str:
+        """Show the current configuration (admin only — it reveals settings)."""
+        if not self.is_admin(sender):
+            return "⛔ Only an admin can view the configuration."
+
+        if self.allowed_senders is None:
+            senders = "OPEN (everyone)"
+        else:
+            senders = ", ".join(sorted(self.allowed_senders))
+
+        verbose = "on" if sender in self.verbose_users else "off"
+
+        prompt = self.system_prompt
+        if len(prompt) > 120:
+            prompt = prompt[:120] + "…"
+
+        return (
+            "⚙️ Current configuration\n\n"
+            f"  Model: {self.ollama_model or 'NONE'}\n"
+            f"  System prompt: {prompt}\n"
+            f"  Allowed senders: {senders}\n"
+            f"  Max history: {self.max_history} pairs\n"
+            f"  Verbose (you): {verbose}"
+        )
+
     async def cmd_maxhistory(self, sender: str, args: str) -> str:
         """View or set the maximum conversation history (in message pairs)."""
         if not args:
             return f"📏 Max history is currently set to *{self.max_history}* pairs."
+
+        if not self.is_admin(sender):
+            return "⛔ Only an admin can change the history limit."
 
         try:
             value = int(args.strip())
@@ -511,9 +976,11 @@ class OllamaSignalBot:
             "/show": lambda: self.cmd_show(sender, args),
             "/reset": lambda: self.cmd_reset(sender),
             "/history": lambda: self.cmd_history(sender),
+            "/recent": lambda: self.cmd_recent(sender, args),
             "/maxhistory": lambda: self.cmd_maxhistory(sender, args),
             "/verbose": lambda: self.cmd_verbose(sender),
             "/heartbeat": lambda: self.cmd_heartbeat(sender),
+            "/config": lambda: self.cmd_config(sender),
         }
 
         handler = commands.get(command)
@@ -590,6 +1057,15 @@ class OllamaSignalBot:
             return
 
         sender = envelope.get("source", "unknown")
+
+        # Ignore group messages — v1 is one-to-one only
+        if data_message.get("groupInfo"):
+            logger.info(f"Ignoring group message from {sender}")
+            return
+
+        self.last_message_at = datetime.now(timezone.utc)
+        self.last_message_sender = sender
+
         logger.info(f"Message received from {sender} Message length: {len(message_text)}")
 
         # Sender allowlist check
@@ -603,6 +1079,15 @@ class OllamaSignalBot:
                 "Please contact the bot administrator to request access."
             )
             return
+
+        # Rate limit: silently drop messages from senders exceeding the window
+        if self.is_rate_limited(sender):
+            logger.warning(f"Rate-limited sender: {sender}")
+            return
+
+        # Cap the incoming message length before sending it to Ollama
+        if len(message_text) > MAX_INPUT_LENGTH:
+            message_text = message_text[:MAX_INPUT_LENGTH]
 
         await self.send_typing(sender)
 
@@ -625,20 +1110,96 @@ class OllamaSignalBot:
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
-    async def wait_for_api(self):
-        """Wait for signal-cli-rest-api to be ready."""
-        logger.info("Waiting for Signal API to be ready...")
-        for i in range(60):
-            try:
-                r = await self.client.get(f"{self.signal_api_url}/v1/about")
-                if r.status_code == 200:
-                    logger.info(f"Signal API is ready: {r.json()}")
-                    return
-            except Exception:
-                pass
-            await asyncio.sleep(2)
-        logger.error("Signal API did not become ready in time")
-        sys.exit(1)
+    async def check_dependencies(self) -> dict:
+        """Check the health of signal-api, Ollama, and account linking."""
+        status = {
+            "signal_api": {"ok": False},
+            "ollama": {"ok": False, "models": None, "version": None},
+            "account": {"linked": False, "phone_number": None},
+        }
+
+        # signal-api
+        try:
+            r = await self.client.get(f"{self.signal_api_url}/v1/about", timeout=5.0)
+            if r.status_code == 200:
+                status["signal_api"]["ok"] = True
+                status["signal_api"]["version"] = r.json().get("version")
+        except Exception:
+            pass
+
+        # Ollama
+        try:
+            r = await self.client.get(f"{self.ollama_url}/api/tags", timeout=5.0)
+            if r.status_code == 200:
+                data = r.json()
+                status["ollama"]["ok"] = True
+                status["ollama"]["models"] = len(data.get("models", []))
+        except Exception:
+            pass
+
+        try:
+            r = await self.client.get(f"{self.ollama_url}/api/version", timeout=5.0)
+            if r.status_code == 200:
+                status["ollama"]["version"] = r.json().get("version")
+        except Exception:
+            pass
+
+        # Linked Signal account
+        try:
+            r = await self.client.get(f"{self.signal_api_url}/v1/accounts", timeout=5.0)
+            if r.status_code == 200:
+                accounts = r.json()
+                if isinstance(accounts, list) and accounts:
+                    status["account"]["linked"] = True
+                    status["account"]["phone_number"] = str(accounts[0])
+        except Exception:
+            pass
+
+        return status
+
+    async def unlink_account(self) -> bool:
+        """Unlink the current Signal account so a new one can be linked."""
+        if not self.phone_number:
+            return True
+        number = self.phone_number
+        try:
+            r = await self.client.post(
+                f"{self.signal_api_url}/v1/unregister/{number}",
+                timeout=30.0,
+            )
+            ok = r.status_code in (200, 204)
+        except Exception as e:
+            logger.error(f"Failed to unlink account {number}: {e}")
+            return False
+        if ok:
+            self.phone_number = ""
+            logger.info(f"Unlinked Signal account {number}")
+        return ok
+
+    async def _wait_until_ready(self):
+        """Wait until signal-api is up, an account is linked, and a model is set."""
+        while True:
+            _touch_heartbeat()
+            deps = await self.check_dependencies()
+
+            if not deps["signal_api"]["ok"]:
+                await asyncio.sleep(2)
+                continue
+
+            if not self.phone_number:
+                self.phone_number = deps["account"]["phone_number"]
+                if not self.phone_number:
+                    await asyncio.sleep(2)
+                    continue
+                logger.info(f"Bot phone number: {self.phone_number}")
+
+            if not self.ollama_model:
+                await self.auto_detect_model()
+                if not self.ollama_model:
+                    await asyncio.sleep(2)
+                    continue
+
+            return
 
     async def auto_detect_model(self):
         """Auto-detect an Ollama model if none was configured, or validate the configured one."""
@@ -681,22 +1242,58 @@ class OllamaSignalBot:
         logger.info(f"Auto-detected model: '{first_model}'")
         self.ollama_model = first_model
 
+    async def get_available_models(self) -> list[dict]:
+        """Return available Ollama models with size and quantization info."""
+        data = await self.ollama_get("/api/tags")
+        if not data:
+            return []
+        models = []
+        for m in data.get("models", []):
+            details = m.get("details") or {}
+            models.append({
+                "name": m.get("name", ""),
+                "size_gb": round(m.get("size", 0) / (1024 ** 3), 1),
+                "quantization": details.get("quantization_level", ""),
+                "parameter_size": details.get("parameter_size", ""),
+            })
+        return models
+
+    async def pull_model(self, name: str) -> bool:
+        """Pull a model into Ollama. Returns True on success."""
+        name = (name or "").strip()
+        if not name:
+            return False
+        try:
+            r = await self.client.post(
+                f"{self.ollama_url}/api/pull",
+                json={"name": name, "stream": False},
+                timeout=600.0,
+            )
+            return r.status_code == 200
+        except Exception as e:
+            logger.error(f"Model pull failed for '{name}': {e}")
+            return False
+
     async def run(self):
         """Main polling loop."""
-        await self.wait_for_api()
-        await self.auto_detect_model()
-        logger.info(f"Bot is running — polling for messages... (model: {self.ollama_model or 'NONE'})")
-
         while True:
-            try:
-                messages = await self.receive_messages()
-                for msg in messages:
-                    envelope = msg.get("envelope", {})
-                    await self.handle_message(envelope)
-            except Exception as e:
-                logger.error(f"Error in polling loop: {e}")
+            await self._wait_until_ready()
+            logger.info(f"Bot is running — polling for messages... (model: {self.ollama_model or 'NONE'})")
 
-            await asyncio.sleep(1)
+            while self.phone_number:
+                try:
+                    messages = await self.receive_messages()
+                    for msg in messages:
+                        envelope = msg.get("envelope", {})
+                        await self.handle_message(envelope)
+                except Exception as e:
+                    logger.error(f"Error in polling loop: {e}")
+
+                _touch_heartbeat()
+                await asyncio.sleep(1)
+
+            # Phone number became empty (e.g., account unlinked) — wait to re-link.
+            logger.info("No linked Signal account — waiting to link...")
 
     async def stop(self):
         """Clean up."""
@@ -704,16 +1301,20 @@ class OllamaSignalBot:
 
 
 async def main():
-    phone_number = os.getenv("SIGNAL_PHONE_NUMBER")
+    phone_number = os.getenv("SIGNAL_PHONE_NUMBER", "")  # optional; auto-detected after linking
     signal_api_url = os.getenv("SIGNAL_API_URL", "http://signal-api:8080")
-    ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+    ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434")
     ollama_model = os.getenv("OLLAMA_MODEL", "")
     system_prompt = os.getenv("SYSTEM_PROMPT", "You are a helpful assistant.")
     allowed_senders = os.getenv("ALLOWED_SENDERS", "*")
+    allowed_admins = os.getenv("ALLOWED_ADMINS", "*")
+    try:
+        temperature = float(os.getenv("OLLAMA_TEMPERATURE", "") or DEFAULT_TEMPERATURE)
+    except ValueError:
+        temperature = DEFAULT_TEMPERATURE
 
-    if not phone_number:
-        logger.error("SIGNAL_PHONE_NUMBER is required. Set it in .env")
-        sys.exit(1)
+    webui_token = _resolve_webui_token()
+    webui_port = WEBUI_PORT
 
     bot = OllamaSignalBot(
         phone_number=phone_number,
@@ -722,15 +1323,40 @@ async def main():
         ollama_model=ollama_model,
         system_prompt=system_prompt,
         allowed_senders=allowed_senders,
+        allowed_admins=allowed_admins,
+        temperature=temperature,
     )
+
+    # Apply any persisted runtime configuration (overrides env defaults).
+    bot.load_runtime_config()
+
+    # Start the web UI in the same event loop.
+    cleanup = await webui.start_server(bot, "0.0.0.0", webui_port, webui_token)
+    logger.info(f"Web UI listening on port {webui_port}")
 
     try:
         await bot.run()
-    except KeyboardInterrupt:
+    except asyncio.CancelledError:
         logger.info("Shutting down...")
     finally:
+        await cleanup()
         await bot.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    main_task = loop.create_task(main())
+
+    # Cancel the main task on SIGINT/SIGTERM so shutdown is graceful.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, main_task.cancel)
+        except (NotImplementedError, RuntimeError):
+            # Windows fallback: schedule the cancel thread-safely.
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(main_task.cancel))
+
+    try:
+        loop.run_until_complete(main_task)
+    finally:
+        loop.close()
