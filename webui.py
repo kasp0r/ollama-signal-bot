@@ -55,7 +55,7 @@ HTML = """<!DOCTYPE html>
   body.dark input, body.dark textarea, body.dark select { background: #2a2a2a; color: #e6e6e6; border-color: #444; }
   body.dark #link-section { background: #242424; border-color: #333; }
   body.dark code { background: #2a2a2a; }
-  .theme-toggle { margin-top: 1rem; padding: .4rem .8rem; background: #444; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  .theme-toggle { position: fixed; bottom: 1rem; right: 1rem; padding: .5rem .8rem; background: #444; color: #fff; border: 0; border-radius: 4px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.3); z-index: 10; }
   .tabs { display: flex; gap: .25rem; margin-top: 1rem; border-bottom: 1px solid #ccc; }
   .tab { padding: .5rem 1rem; background: transparent; border: 0; cursor: pointer; color: inherit; font-size: .95rem; border-bottom: 2px solid transparent; }
   .tab.active { border-bottom-color: #1a73e8; font-weight: 600; }
