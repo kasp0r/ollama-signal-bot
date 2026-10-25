@@ -77,6 +77,10 @@ HTML = """<!DOCTYPE html>
   <div class="status-row"><span class="dot ok" style="background:#555"></span> Last message <span class="muted" id="status-last">—</span></div>
 </div>
 
+<div class="status-row">
+  <button type="button" class="secondary" onclick="unlinkAccount()">Relink to another Signal account</button>
+</div>
+
 <h2>Stats</h2>
 <div id="stats">
   <div class="status-row"><span class="muted">Total messages:</span> <span id="stat-messages">—</span></div>
@@ -396,6 +400,18 @@ async function pullModel() {
   } catch (e) { showMessage('Pull failed: ' + e, true); }
 }
 
+async function unlinkAccount() {
+  if (!confirm('Unlink the current Signal account? You will need to scan a new QR code to link a different account.')) return;
+  try {
+    const r = await fetch('/api/account/unlink', {method: 'POST', headers: headers()});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) { showMessage('Unlink failed', true); return; }
+    showMessage('Account unlinked — scan the QR code to link a new account.', false);
+    refreshStatus();
+    loadQR();
+  } catch (e) { showMessage('Unlink failed: ' + e, true); }
+}
+
 function saveToken() {
   token = document.getElementById('token').value.trim();
   localStorage.setItem(TOKEN_KEY, token);
@@ -524,6 +540,14 @@ async def _pull_model(request):
     return web.json_response({"pulled": name})
 
 
+async def _unlink_account(request):
+    bot = request.app[_BOT_KEY]
+    ok = await bot.unlink_account()
+    if not ok:
+        return web.json_response({"error": "unlink failed"}, status=500)
+    return web.json_response({"unlinked": True})
+
+
 def create_app(bot, token=None):
     app = web.Application(middlewares=[_auth_middleware])
     app[_BOT_KEY] = bot
@@ -538,6 +562,7 @@ def create_app(bot, token=None):
     app.router.add_get("/api/stats", _stats)
     app.router.add_post("/api/conversations/reset", _reset_conversation)
     app.router.add_post("/api/models/pull", _pull_model)
+    app.router.add_post("/api/account/unlink", _unlink_account)
     return app
 
 

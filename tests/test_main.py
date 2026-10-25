@@ -652,6 +652,23 @@ def test_stats_tracks_tokens():
     assert stats["total_messages"] == 2
 
 
+def test_unlink_account():
+    def handler(request):
+        assert request.method == "DELETE"
+        return httpx.Response(200)
+
+    bot = _mock_bot(handler)
+    bot.phone_number = "+15551234567"
+    assert asyncio.run(bot.unlink_account()) is True
+    assert bot.phone_number == ""
+
+
+def test_unlink_account_already_unlinked():
+    bot = _make_bot()
+    bot.phone_number = ""
+    assert asyncio.run(bot.unlink_account()) is True
+
+
 def test_config_persistence(tmp_path):
     cfg = tmp_path / "config.json"
     bot = _make_bot(config_file=str(cfg))

@@ -1136,6 +1136,25 @@ class OllamaSignalBot:
 
         return status
 
+    async def unlink_account(self) -> bool:
+        """Unlink the current Signal account so a new one can be linked."""
+        if not self.phone_number:
+            return True
+        number = self.phone_number
+        try:
+            r = await self.client.delete(
+                f"{self.signal_api_url}/v1/accounts/{number}",
+                timeout=30.0,
+            )
+            ok = r.status_code in (200, 204, 404)
+        except Exception as e:
+            logger.error(f"Failed to unlink account {number}: {e}")
+            return False
+        if ok:
+            self.phone_number = ""
+            logger.info(f"Unlinked Signal account {number}")
+        return ok
+
     async def _wait_until_ready(self):
         """Wait until signal-api is up, an account is linked, and a model is set."""
         while True:
