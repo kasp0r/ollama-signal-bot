@@ -525,6 +525,20 @@ def test_get_status():
     assert status["model"] == "gemma4:latest"
     assert "uptime_seconds" in status
     assert status["active_chats"] == 0
+    assert status["last_message_at"] is None
+    assert status["last_message_sender"] is None
+
+
+def test_last_message_tracking():
+    def handler(request):
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    bot = _mock_bot(handler)
+    assert bot.last_message_at is None
+    envelope = {"source": "+123", "dataMessage": {"message": "hi"}}
+    asyncio.run(bot.handle_message(envelope))
+    assert bot.last_message_at is not None
+    assert bot.last_message_sender == "+123"
 
 
 def test_webui_get_config():

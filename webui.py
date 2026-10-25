@@ -66,6 +66,7 @@ HTML = """<!DOCTYPE html>
   <div class="status-row"><span class="dot" id="dot-ollama"></span> Ollama <span class="muted" id="status-ollama">checking…</span></div>
   <div class="status-row"><span class="dot" id="dot-account"></span> Signal account <span class="muted" id="status-account">checking…</span></div>
   <div class="status-row"><span class="dot ok" style="background:#555"></span> Model <span class="muted" id="status-model">—</span></div>
+  <div class="status-row"><span class="dot ok" style="background:#555"></span> Last message <span class="muted" id="status-last">—</span></div>
 </div>
 
 <div id="link-section" style="display:none">
@@ -136,6 +137,16 @@ function fillForm(cfg) {
   document.getElementById('allowed_admins').value = cfg.allowed_admins || '*';
 }
 
+function timeAgo(iso) {
+  const t = Date.parse(iso);
+  if (!t) return 'never';
+  const s = Math.floor((Date.now() - t) / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  return Math.floor(m / 60) + 'h ago';
+}
+
 function renderStatus(s) {
   const d = s.dependencies || {};
 
@@ -153,6 +164,8 @@ function renderStatus(s) {
     linked ? d.account.phone_number : 'not linked';
 
   document.getElementById('status-model').textContent = s.model || 'none';
+  document.getElementById('status-last').textContent =
+    s.last_message_at ? (timeAgo(s.last_message_at) + ' from ' + (s.last_message_sender || '?')) : 'none yet';
 
   // Show the linking section only when the account isn't linked.
   const linkSection = document.getElementById('link-section');

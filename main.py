@@ -157,6 +157,9 @@ class OllamaSignalBot:
         self.verbose_users: set[str] = set()
         # Per-sender message timestamps for rate limiting
         self._message_times: dict[str, list[float]] = defaultdict(list)
+        # Last received message (for status/monitoring)
+        self.last_message_at: datetime | None = None
+        self.last_message_sender: str | None = None
 
         logger.info(f"Bot phone number: {phone_number or '(auto-detect)'}")
         logger.info(f"Signal API: {signal_api_url}")
@@ -276,6 +279,8 @@ class OllamaSignalBot:
             "uptime_seconds": int(uptime.total_seconds()),
             "active_chats": sum(1 for v in self.conversations.values() if v),
             "messages_in_memory": sum(len(v) for v in self.conversations.values()),
+            "last_message_at": self.last_message_at.isoformat() if self.last_message_at else None,
+            "last_message_sender": self.last_message_sender,
         }
 
     # ── Ollama API helpers ──────────────────────────────────────────
@@ -814,6 +819,9 @@ class OllamaSignalBot:
         if data_message.get("groupInfo"):
             logger.info(f"Ignoring group message from {sender}")
             return
+
+        self.last_message_at = datetime.now(timezone.utc)
+        self.last_message_sender = sender
 
         logger.info(f"Message received from {sender} Message length: {len(message_text)}")
 
