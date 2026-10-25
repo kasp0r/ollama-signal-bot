@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -28,6 +29,12 @@ logger = logging.getLogger(__name__)
 # Maximum conversation history per user (number of message pairs)
 MAX_HISTORY = 50
 START_TIME = datetime.now(timezone.utc)
+
+# Security limits
+MAX_INPUT_LENGTH = 4000       # max chars of a user message sent to Ollama
+MAX_OUTPUT_LENGTH = 4000      # max chars of a model response returned to Signal
+RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
+RATE_LIMIT_WINDOW_SECONDS = 60
 
 def format_for_signal(text: str) -> str:
     """
@@ -95,6 +102,7 @@ class OllamaSignalBot:
         ollama_model: str = "gemma4:latest",
         system_prompt: str = "You are a helpful assistant.",
         allowed_senders: str = "*",
+        allowed_admins: str = "*",
     ):
         self.phone_number = phone_number
         self.signal_api_url = signal_api_url.rstrip("/")
@@ -112,10 +120,21 @@ class OllamaSignalBot:
             self.allowed_senders = {s.strip() for s in allowed_senders.split(",") if s.strip()}
             logger.info(f"Sender allowlist: {self.allowed_senders}")
 
+        # Admin allowlist: "*" means every allowed sender is an admin,
+        # otherwise a subset of phone numbers who may run privileged commands.
+        if allowed_admins.strip() == "*" or not allowed_admins.strip():
+            self.allowed_admins: set[str] | None = None  # None = everyone is admin
+            logger.info("Admin allowlist: OPEN (every sender is an admin)")
+        else:
+            self.allowed_admins = {s.strip() for s in allowed_admins.split(",") if s.strip()}
+            logger.info(f"Admin allowlist: {self.allowed_admins}")
+
         # Per-user conversation history: { sender: [{"role": ..., "content": ...}, ...] }
         self.conversations: dict[str, list[dict]] = defaultdict(list)
         # Per-user verbose mode (off by default)
         self.verbose_users: set[str] = set()
+        # Per-sender message timestamps for rate limiting
+        self._message_times: dict[str, list[float]] = defaultdict(list)
 
         logger.info(f"Bot phone number: {phone_number}")
         logger.info(f"Signal API: {signal_api_url}")
@@ -128,6 +147,29 @@ class OllamaSignalBot:
         if self.allowed_senders is None:
             return True
         return sender in self.allowed_senders
+
+    def is_admin(self, sender: str) -> bool:
+        """Check if a sender may run privileged (admin) commands."""
+        if self.allowed_admins is None:
+            return True
+        return sender in self.allowed_admins
+
+    def is_rate_limited(self, sender: str) -> bool:
+        """Enforce a per-sender sliding-window rate limit.
+
+        Returns True if the sender should be throttled; otherwise records
+        the message and returns False.
+        """
+        now = time.monotonic()
+        recent = [
+            t for t in self._message_times[sender]
+            if now - t < RATE_LIMIT_WINDOW_SECONDS
+        ]
+        self._message_times[sender] = recent
+        if len(recent) >= RATE_LIMIT_MESSAGES:
+            return True
+        recent.append(now)
+        return False
 
     # ── Ollama API helpers ──────────────────────────────────────────
 
@@ -165,6 +207,10 @@ class OllamaSignalBot:
 
             result = response.json()
             answer = result.get("message", {}).get("content", "No response from model.")
+
+            # Cap the response length to avoid flooding Signal
+            if len(answer) > MAX_OUTPUT_LENGTH:
+                answer = answer[:MAX_OUTPUT_LENGTH] + "…"
 
             # Append assistant response to history
             self.conversations[sender].append({"role": "assistant", "content": answer})
@@ -286,6 +332,9 @@ class OllamaSignalBot:
         """Show or change the current model."""
         if not args:
             return f"🤖 Current model: *{self.ollama_model}*"
+
+        if not self.is_admin(sender):
+            return "⛔ Only an admin can change the model."
 
         new_model = args.strip()
 
@@ -483,7 +532,10 @@ class OllamaSignalBot:
         return "\n\n".join(lines)
 
     async def cmd_config(self, sender: str) -> str:
-        """Show the current configuration."""
+        """Show the current configuration (admin only — it reveals settings)."""
+        if not self.is_admin(sender):
+            return "⛔ Only an admin can view the configuration."
+
         if self.allowed_senders is None:
             senders = "OPEN (everyone)"
         else:
@@ -508,6 +560,9 @@ class OllamaSignalBot:
         """View or set the maximum conversation history (in message pairs)."""
         if not args:
             return f"📏 Max history is currently set to *{self.max_history}* pairs."
+
+        if not self.is_admin(sender):
+            return "⛔ Only an admin can change the history limit."
 
         try:
             value = int(args.strip())
@@ -657,6 +712,15 @@ class OllamaSignalBot:
             )
             return
 
+        # Rate limit: silently drop messages from senders exceeding the window
+        if self.is_rate_limited(sender):
+            logger.warning(f"Rate-limited sender: {sender}")
+            return
+
+        # Cap the incoming message length before sending it to Ollama
+        if len(message_text) > MAX_INPUT_LENGTH:
+            message_text = message_text[:MAX_INPUT_LENGTH]
+
         await self.send_typing(sender)
 
         try:
@@ -763,6 +827,7 @@ async def main():
     ollama_model = os.getenv("OLLAMA_MODEL", "")
     system_prompt = os.getenv("SYSTEM_PROMPT", "You are a helpful assistant.")
     allowed_senders = os.getenv("ALLOWED_SENDERS", "*")
+    allowed_admins = os.getenv("ALLOWED_ADMINS", "*")
 
     if not phone_number:
         logger.error("SIGNAL_PHONE_NUMBER is required. Set it in .env")
@@ -775,6 +840,7 @@ async def main():
         ollama_model=ollama_model,
         system_prompt=system_prompt,
         allowed_senders=allowed_senders,
+        allowed_admins=allowed_admins,
     )
 
     try:

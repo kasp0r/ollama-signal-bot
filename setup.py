@@ -146,12 +146,14 @@ def configure(existing):
     model = ask("Ollama model", default("OLLAMA_MODEL") or "gemma4:latest")
     system_prompt = ask("System prompt", default("SYSTEM_PROMPT") or "You are a helpful assistant.")
     allowed = ask("Allowed senders (* = everyone)", default("ALLOWED_SENDERS") or "*")
+    admins = ask("Admin senders (* = everyone)", default("ALLOWED_ADMINS") or "*")
 
     return {
         "SIGNAL_PHONE_NUMBER": clean(phone),
         "OLLAMA_MODEL": clean(model),
         "SYSTEM_PROMPT": clean(system_prompt),
         "ALLOWED_SENDERS": clean(allowed),
+        "ALLOWED_ADMINS": clean(admins),
     }
 
 
@@ -164,6 +166,7 @@ def write_env(values, ollama_url):
         "OLLAMA_MODEL=" + values["OLLAMA_MODEL"],
         "SYSTEM_PROMPT=" + values["SYSTEM_PROMPT"],
         "ALLOWED_SENDERS=" + values["ALLOWED_SENDERS"],
+        "ALLOWED_ADMINS=" + values["ALLOWED_ADMINS"],
         "",
     ]
     with open(".env", "w", encoding="utf-8") as f:

@@ -2,15 +2,17 @@ services:
   # Bundled Ollama — started only when you pass --profile ollama
   # (setup.py does this automatically when no host Ollama is detected).
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.11
     container_name: ollama
     profiles: ["ollama"]
     environment:
       - OLLAMA_KEEP_ALIVE=24h
     volumes:
       - ollama-data:/root/.ollama
+    # Bound to localhost only — the bot reaches Ollama over the internal
+    # Docker network, so it never needs to be exposed beyond this machine.
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     restart: unless-stopped
     # Uncomment for NVIDIA GPU acceleration:
     # deploy:
@@ -26,8 +28,9 @@ services:
     container_name: signal-api
     environment:
       - MODE=normal
+    # Bound to localhost only — only the setup script (on the host) needs it.
     ports:
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
     volumes:
       - signal-cli-data:/home/.local/share/signal-cli
     restart: unless-stopped

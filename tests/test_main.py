@@ -74,12 +74,13 @@ def test_snake_case_not_italicized():
 
 # ── sender allowlist ──────────────────────────────────────────────
 
-def _make_bot(allowed_senders="*"):
+def _make_bot(allowed_senders="*", allowed_admins="*"):
     return main.OllamaSignalBot(
         phone_number="+15551234567",
         signal_api_url="http://signal-api:8080",
         ollama_url="http://ollama:11434",
         allowed_senders=allowed_senders,
+        allowed_admins=allowed_admins,
     )
 
 
@@ -352,3 +353,72 @@ def test_config():
     assert "gemma4:latest" in resp
     assert "OPEN" in resp
     assert "50 pairs" in resp
+
+
+# ── security controls ─────────────────────────────────────────────
+
+def test_admin_open_default():
+    bot = _make_bot()
+    assert bot.is_admin("+123") is True
+
+
+def test_admin_specific():
+    bot = _make_bot(allowed_admins="+111")
+    assert bot.is_admin("+111") is True
+    assert bot.is_admin("+222") is False
+
+
+def test_model_change_requires_admin():
+    bot = _make_bot(allowed_admins="+111")
+    resp = asyncio.run(bot.handle_command("+222", "/model gemma4:latest"))
+    assert "admin" in resp
+
+
+def test_model_show_allowed_for_non_admin():
+    bot = _make_bot(allowed_admins="+111")
+    resp = asyncio.run(bot.handle_command("+222", "/model"))
+    assert "gemma4:latest" in resp
+
+
+def test_maxhistory_change_requires_admin():
+    bot = _make_bot(allowed_admins="+111")
+    resp = asyncio.run(bot.handle_command("+222", "/maxhistory 25"))
+    assert "admin" in resp
+
+
+def test_config_requires_admin():
+    bot = _make_bot(allowed_admins="+111")
+    resp = asyncio.run(bot.handle_command("+222", "/config"))
+    assert "admin" in resp
+
+
+def test_rate_limiting():
+    bot = _make_bot()
+    for _ in range(main.RATE_LIMIT_MESSAGES):
+        assert bot.is_rate_limited("+123") is False
+    assert bot.is_rate_limited("+123") is True
+
+
+def test_query_ollama_caps_output():
+    def handler(request):
+        return httpx.Response(200, json={"message": {"content": "x" * 5000}})
+
+    bot = _mock_bot(handler)
+    resp = asyncio.run(bot.query_ollama("+123", "hi"))
+    assert len(resp) == main.MAX_OUTPUT_LENGTH + 1  # +1 for the ellipsis
+    assert resp.endswith("…")
+
+
+def test_handle_message_caps_input():
+    chat_payloads = []
+
+    def handler(request):
+        if request.url.path == "/api/chat":
+            chat_payloads.append(json.loads(request.content))
+            return httpx.Response(200, json={"message": {"content": "ok"}})
+        return httpx.Response(200, json={})
+
+    bot = _mock_bot(handler)
+    envelope = {"source": "+123", "dataMessage": {"message": "y" * 6000}}
+    asyncio.run(bot.handle_message(envelope))
+    assert len(chat_payloads[0]["messages"][-1]["content"]) == main.MAX_INPUT_LENGTH

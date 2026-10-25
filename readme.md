@@ -27,6 +27,7 @@ A self-hosted Signal bot that forwards your messages to a local [Ollama](https:/
 - [Bot commands](#bot-commands)
 - [How it works](#how-it-works)
 - [Privacy](#privacy)
+- [Security](#security)
 - [Troubleshooting](#troubleshooting)
 - [Attribution & license](#attribution--license)
 - [Alternative projects](#alternative-projects)
@@ -94,6 +95,7 @@ The app remains the primary device; the bot is linked to it and must stay instal
 | `OLLAMA_MODEL` | No | auto-detect | Model name (e.g. `gemma4:latest`) |
 | `SYSTEM_PROMPT` | No | `You are a helpful assistant.` | System prompt for every reply |
 | `ALLOWED_SENDERS` | No | `*` | `*` = everyone, or comma-separated numbers |
+| `ALLOWED_ADMINS` | No | `*` | Who can run admin commands (`*` = everyone, or numbers) |
 
 ### Ollama: Docker or your own?
 
@@ -136,6 +138,8 @@ Send any of these to the bot's number:
 | `/verbose` | Toggle response telemetry |
 | `/config` | Show current settings |
 
+> **Admin-only:** `/model <name>`, `/maxhistory <n>`, and `/config` require the sender to be in `ALLOWED_ADMINS`.
+
 With `/verbose` enabled, each reply includes telemetry:
 
 ```
@@ -163,6 +167,15 @@ Signal app  ⇄  signal-cli-rest-api  ⇄  bot  ⇄  Ollama
 - Messages are decrypted on your machine only; plaintext travels over the **local Docker network** and never touches the internet.
 - **Conversation history is in memory only** — never written to disk, cleared on restart or `/reset`.
 - The only persisted data is your Signal device keys (`signal-cli-data` volume) and the Ollama model files.
+
+## Security
+
+- **Localhost-only ports** — the Signal API and Ollama bind to `127.0.0.1`, so they're not exposed to your LAN.
+- **Sender allowlist** (`ALLOWED_SENDERS`) — controls who can message the bot.
+- **Admin allowlist** (`ALLOWED_ADMINS`) — controls who can change models, limits, and view config.
+- **Rate limiting** — 10 messages per minute per sender.
+- **Message length caps** — prompts and responses are truncated to avoid abuse.
+- **Non-root container** — the bot runs as an unprivileged user.
 
 ## Troubleshooting
 
