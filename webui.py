@@ -261,6 +261,12 @@ function renderStatus(s) {
   const linkSection = document.getElementById('link-section');
   if (linked) {
     linkSection.style.display = 'none';
+    // Clear a stale "account unlinked" message once re-linked.
+    const msg = document.getElementById('message');
+    if (msg.textContent.indexOf('Account unlinked') !== -1) {
+      msg.textContent = '';
+      msg.className = '';
+    }
   } else {
     linkSection.style.display = 'block';
   }
