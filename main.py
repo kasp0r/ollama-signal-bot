@@ -1163,8 +1163,8 @@ class OllamaSignalBot:
             return True
         number = self.phone_number
         try:
-            r = await self.client.delete(
-                f"{self.signal_api_url}/v1/accounts/{number}",
+            r = await self.client.post(
+                f"{self.signal_api_url}/v1/unregister/{number}",
                 timeout=30.0,
             )
             ok = r.status_code in (200, 204)

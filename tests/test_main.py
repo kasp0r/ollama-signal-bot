@@ -654,8 +654,9 @@ def test_stats_tracks_tokens():
 
 def test_unlink_account():
     def handler(request):
-        assert request.method == "DELETE"
-        return httpx.Response(200)
+        assert request.method == "POST"
+        assert "/v1/unregister/" in str(request.url)
+        return httpx.Response(204)
 
     bot = _mock_bot(handler)
     bot.phone_number = "+15551234567"
