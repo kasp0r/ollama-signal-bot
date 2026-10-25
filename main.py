@@ -40,6 +40,8 @@ MAX_INPUT_LENGTH = 4000       # max chars of a user message sent to Ollama
 MAX_OUTPUT_LENGTH = 4000      # max chars of a model response returned to Signal
 MAX_OUTPUT_TOKENS = 1024      # Ollama num_predict (max generated tokens)
 DEFAULT_TEMPERATURE = 0.7     # Ollama sampling temperature
+DEFAULT_TOP_P = 0.9           # Ollama nucleus sampling
+DEFAULT_TOP_K = 40            # Ollama top-k sampling
 RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
 RATE_LIMIT_WINDOW_SECONDS = 60
 HEARTBEAT_FILE = "/tmp/ollama-signal-bot.heartbeat"
@@ -154,6 +156,9 @@ class OllamaSignalBot:
         allowed_senders: str = "*",
         allowed_admins: str = "*",
         temperature: float = DEFAULT_TEMPERATURE,
+        num_predict: int = MAX_OUTPUT_TOKENS,
+        top_p: float = DEFAULT_TOP_P,
+        top_k: int = DEFAULT_TOP_K,
         config_file: str = CONFIG_FILE,
     ):
         self.phone_number = phone_number
@@ -162,6 +167,9 @@ class OllamaSignalBot:
         self.ollama_model = ollama_model
         self.system_prompt = system_prompt
         self.temperature = temperature
+        self.num_predict = num_predict
+        self.top_p = top_p
+        self.top_k = top_k
         self.client = httpx.AsyncClient(timeout=180.0)
         self.max_history = MAX_HISTORY
         self.config_file = config_file
@@ -199,6 +207,9 @@ class OllamaSignalBot:
             "signal_api_url": self.signal_api_url,
             "ollama_url": self.ollama_url,
             "temperature": self.temperature,
+            "num_predict": self.num_predict,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
             "system_prompt": self.system_prompt,
             "max_history": self.max_history,
             "allowed_senders": self._senders_to_str(self.allowed_senders),
@@ -263,6 +274,12 @@ class OllamaSignalBot:
             self.ollama_url = str(config["ollama_url"]).strip().rstrip("/")
         if "temperature" in config:
             self.temperature = float(config["temperature"])
+        if "num_predict" in config:
+            self.num_predict = int(config["num_predict"])
+        if "top_p" in config:
+            self.top_p = float(config["top_p"])
+        if "top_k" in config:
+            self.top_k = int(config["top_k"])
         if "system_prompt" in config:
             self.system_prompt = str(config["system_prompt"])
         if "max_history" in config:
@@ -279,6 +296,9 @@ class OllamaSignalBot:
             "signal_api_url": self.signal_api_url,
             "ollama_url": self.ollama_url,
             "temperature": self.temperature,
+            "num_predict": self.num_predict,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
             "system_prompt": self.system_prompt,
             "max_history": self.max_history,
             "allowed_senders": self._senders_to_str(self.allowed_senders),
@@ -291,6 +311,18 @@ class OllamaSignalBot:
             t = float(config["temperature"])
             if not 0.0 <= t <= 2.0:
                 raise ValueError("temperature must be between 0.0 and 2.0")
+        if "num_predict" in config:
+            n = int(config["num_predict"])
+            if n < 1:
+                raise ValueError("num_predict must be at least 1")
+        if "top_p" in config:
+            p = float(config["top_p"])
+            if not 0.0 < p <= 1.0:
+                raise ValueError("top_p must be between 0.0 and 1.0")
+        if "top_k" in config:
+            k = int(config["top_k"])
+            if k < 1:
+                raise ValueError("top_k must be at least 1")
         if "max_history" in config:
             n = int(config["max_history"])
             if n < 1:
@@ -383,8 +415,10 @@ class OllamaSignalBot:
                 ],
                 "stream": False,
                 "options": {
-                    "num_predict": MAX_OUTPUT_TOKENS,
+                    "num_predict": self.num_predict,
                     "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": self.top_k,
                 },
             }
 

@@ -96,6 +96,18 @@ HTML = """<!DOCTYPE html>
   <label for="temperature">Temperature</label>
   <input id="temperature" type="number" step="0.1" min="0" max="2">
 
+  <label for="num_predict">Max tokens (num_predict)</label>
+  <input id="num_predict" type="number" min="1">
+  <div class="hint">Maximum tokens to generate per reply (default 1024).</div>
+
+  <label for="top_p">Top P</label>
+  <input id="top_p" type="number" step="0.05" min="0" max="1">
+  <div class="hint">Nucleus sampling (0.0-1.0, default 0.9).</div>
+
+  <label for="top_k">Top K</label>
+  <input id="top_k" type="number" min="1">
+  <div class="hint">Top-k sampling (default 40).</div>
+
   <label for="system_prompt">System prompt</label>
   <textarea id="system_prompt"></textarea>
 
@@ -104,7 +116,7 @@ HTML = """<!DOCTYPE html>
 
   <label for="allowed_senders">Allowed senders</label>
   <input id="allowed_senders" type="text">
-  <div class="hint"><code>*</code> = everyone, or comma-separated numbers.</div>
+  <div class="hint">Examples: <code>*</code> = everyone · <code>+15551234567</code> = one user · <code>+15551234567,+15559876543</code> = multiple users.</div>
 
   <label for="allowed_admins">Allowed admins</label>
   <input id="allowed_admins" type="text">
@@ -158,6 +170,9 @@ function fillForm(cfg) {
   document.getElementById('ollama_url').value = cfg.ollama_url || '';
   setModelSelect(cfg.ollama_model || '');
   document.getElementById('temperature').value = cfg.temperature ?? 0.7;
+  document.getElementById('num_predict').value = cfg.num_predict ?? 1024;
+  document.getElementById('top_p').value = cfg.top_p ?? 0.9;
+  document.getElementById('top_k').value = cfg.top_k ?? 40;
   document.getElementById('system_prompt').value = cfg.system_prompt || '';
   document.getElementById('max_history').value = cfg.max_history ?? 50;
   document.getElementById('allowed_senders').value = cfg.allowed_senders || '*';
@@ -257,6 +272,9 @@ async function saveConfig(e) {
     ollama_url: document.getElementById('ollama_url').value.trim(),
     ollama_model: document.getElementById('ollama_model').value.trim(),
     temperature: parseFloat(document.getElementById('temperature').value),
+    num_predict: parseInt(document.getElementById('num_predict').value, 10),
+    top_p: parseFloat(document.getElementById('top_p').value),
+    top_k: parseInt(document.getElementById('top_k').value, 10),
     system_prompt: document.getElementById('system_prompt').value,
     max_history: parseInt(document.getElementById('max_history').value, 10),
     allowed_senders: document.getElementById('allowed_senders').value.trim() || '*',

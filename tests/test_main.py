@@ -459,6 +459,8 @@ def test_query_ollama_sends_generation_options():
     options = payloads[0].get("options", {})
     assert options["num_predict"] == main.MAX_OUTPUT_TOKENS
     assert options["temperature"] == main.DEFAULT_TEMPERATURE
+    assert options["top_p"] == main.DEFAULT_TOP_P
+    assert options["top_k"] == main.DEFAULT_TOP_K
 
 
 def test_temperature_configurable():
@@ -475,6 +477,9 @@ def test_get_runtime_config():
     assert cfg["signal_api_url"] == "http://signal-api:8080"
     assert cfg["ollama_url"] == "http://ollama:11434"
     assert cfg["temperature"] == 0.7
+    assert cfg["num_predict"] == 1024
+    assert cfg["top_p"] == 0.9
+    assert cfg["top_k"] == 40
     assert cfg["allowed_senders"] == "*"
     assert cfg["max_history"] == 50
 
@@ -507,6 +512,12 @@ def test_apply_runtime_config_validation():
         bot.apply_runtime_config({"temperature": 5.0})
     with pytest.raises(ValueError):
         bot.apply_runtime_config({"max_history": 0})
+    with pytest.raises(ValueError):
+        bot.apply_runtime_config({"num_predict": 0})
+    with pytest.raises(ValueError):
+        bot.apply_runtime_config({"top_p": 1.5})
+    with pytest.raises(ValueError):
+        bot.apply_runtime_config({"top_k": 0})
 
 
 def test_apply_runtime_config_ollama_url():
