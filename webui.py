@@ -55,6 +55,10 @@ HTML = """<!DOCTYPE html>
   body.dark #link-section { background: #242424; border-color: #333; }
   body.dark code { background: #2a2a2a; }
   .theme-toggle { margin-top: 1rem; padding: .4rem .8rem; background: #444; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  .tabs { display: flex; gap: .25rem; margin-top: 1rem; border-bottom: 1px solid #ccc; }
+  .tab { padding: .5rem 1rem; background: transparent; border: 0; cursor: pointer; color: inherit; font-size: .95rem; border-bottom: 2px solid transparent; }
+  .tab.active { border-bottom-color: #1a73e8; font-weight: 600; }
+  body.dark .tabs { border-bottom-color: #444; }
 </style>
 </head>
 <body>
@@ -68,6 +72,13 @@ HTML = """<!DOCTYPE html>
   <button type="button" class="secondary" onclick="saveToken()">Unlock</button>
 </div>
 
+<div class="tabs">
+  <button class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</button>
+  <button class="tab" data-tab="conversations" onclick="switchTab('conversations')">Conversations</button>
+  <button class="tab" data-tab="settings" onclick="switchTab('settings')">Settings</button>
+</div>
+
+<div id="tab-overview" class="tab-content">
 <h2>Status</h2>
 <div id="status">
   <div class="status-row"><span class="dot" id="dot-signal"></span> Signal API <span class="muted" id="status-signal">checking…</span></div>
@@ -88,9 +99,6 @@ HTML = """<!DOCTYPE html>
   <div class="status-row"><span class="muted">Tokens in / out:</span> <span id="stat-tokens">—</span></div>
 </div>
 
-<h2>Conversations</h2>
-<div id="conversations" class="muted">loading…</div>
-
 <div id="link-section" style="display:none">
   <h2>Link your Signal account</h2>
   <p>Scan this QR code with the Signal app registered on the bot's number
@@ -98,7 +106,14 @@ HTML = """<!DOCTYPE html>
   <img id="qr-img" alt="QR code">
   <p><button type="button" class="secondary" onclick="loadQR()">Generate new QR code</button></p>
 </div>
+</div>
 
+<div id="tab-conversations" class="tab-content" style="display:none">
+<h2>Conversations</h2>
+<div id="conversations" class="muted">loading…</div>
+</div>
+
+<div id="tab-settings" class="tab-content" style="display:none">
 <h2>Configuration</h2>
 <form id="form" onsubmit="saveConfig(event)">
   <label for="signal_api_url">Signal API URL</label>
@@ -154,6 +169,8 @@ HTML = """<!DOCTYPE html>
   <button type="submit">Save changes</button>
   <button type="button" class="secondary" onclick="resetConfig()">Reset to default settings</button>
 </form>
+</div>
+
 <div id="message"></div>
 
 <script>
@@ -336,6 +353,14 @@ async function resetConfig() {
 function toggleTheme() {
   const dark = document.body.classList.toggle('dark');
   localStorage.setItem('osb_theme', dark ? 'dark' : 'light');
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(function(el) { el.style.display = 'none'; });
+  document.getElementById('tab-' + name).style.display = 'block';
+  document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('active'); });
+  document.querySelector('.tab[data-tab="' + name + '"]').classList.add('active');
+  if (name === 'conversations') loadStats();
 }
 
 async function loadStats() {
