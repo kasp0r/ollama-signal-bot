@@ -79,6 +79,10 @@ HTML = """<!DOCTYPE html>
 
 <h2>Configuration</h2>
 <form id="form" onsubmit="saveConfig(event)">
+  <label for="signal_api_url">Signal API URL</label>
+  <input id="signal_api_url" type="text">
+  <div class="hint">Defaults to the bundled signal-api (<code>http://signal-api:8080</code>), or point at a remote one.</div>
+
   <label for="ollama_url">Ollama URL</label>
   <input id="ollama_url" type="text">
   <div class="hint">Local or remote Ollama server, e.g. <code>http://host.docker.internal:11434</code>.</div>
@@ -107,6 +111,7 @@ HTML = """<!DOCTYPE html>
   <div class="hint"><code>*</code> = every allowed sender, or comma-separated numbers.</div>
 
   <button type="submit">Save changes</button>
+  <button type="button" class="secondary" onclick="resetConfig()">Reset to default settings</button>
 </form>
 <div id="message"></div>
 
@@ -149,6 +154,7 @@ function setModelSelect(value) {
 }
 
 function fillForm(cfg) {
+  document.getElementById('signal_api_url').value = cfg.signal_api_url || '';
   document.getElementById('ollama_url').value = cfg.ollama_url || '';
   setModelSelect(cfg.ollama_model || '');
   document.getElementById('temperature').value = cfg.temperature ?? 0.7;
@@ -247,6 +253,7 @@ async function loadQR() {
 async function saveConfig(e) {
   e.preventDefault();
   const payload = {
+    signal_api_url: document.getElementById('signal_api_url').value.trim(),
     ollama_url: document.getElementById('ollama_url').value.trim(),
     ollama_model: document.getElementById('ollama_model').value.trim(),
     temperature: parseFloat(document.getElementById('temperature').value),
@@ -265,6 +272,17 @@ async function saveConfig(e) {
     }
     showMessage('Saved', false);
   } catch (e) { showMessage('Save failed: ' + e, true); }
+}
+
+async function resetConfig() {
+  if (!confirm('Reset all settings to their defaults?')) return;
+  try {
+    const r = await fetch('/api/config/reset', {method: 'POST', headers: headers()});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) { showMessage('Reset failed', true); return; }
+    fillForm(await r.json());
+    showMessage('Reset to defaults', false);
+  } catch (e) { showMessage('Reset failed: ' + e, true); }
 }
 
 function saveToken() {
@@ -353,6 +371,12 @@ async def _put_config(request):
     return web.json_response(request.app[_BOT_KEY].get_runtime_config())
 
 
+async def _reset_config(request):
+    bot = request.app[_BOT_KEY]
+    bot.reset_runtime_config()
+    return web.json_response(bot.get_runtime_config())
+
+
 def create_app(bot, token=None):
     app = web.Application(middlewares=[_auth_middleware])
     app[_BOT_KEY] = bot
@@ -363,6 +387,7 @@ def create_app(bot, token=None):
     app.router.add_get("/api/models", _models)
     app.router.add_get("/api/config", _get_config)
     app.router.add_put("/api/config", _put_config)
+    app.router.add_post("/api/config/reset", _reset_config)
     return app
 
 

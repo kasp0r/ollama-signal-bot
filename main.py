@@ -193,6 +193,18 @@ class OllamaSignalBot:
         self.last_message_at: datetime | None = None
         self.last_message_sender: str | None = None
 
+        # Snapshot of the initial (env/default) config, for "reset to defaults".
+        self._initial_config = {
+            "ollama_model": self.ollama_model,
+            "signal_api_url": self.signal_api_url,
+            "ollama_url": self.ollama_url,
+            "temperature": self.temperature,
+            "system_prompt": self.system_prompt,
+            "max_history": self.max_history,
+            "allowed_senders": self._senders_to_str(self.allowed_senders),
+            "allowed_admins": self._senders_to_str(self.allowed_admins),
+        }
+
         logger.info(f"Bot phone number: {phone_number or '(auto-detect)'}")
         logger.info(f"Signal API: {signal_api_url}")
         logger.info(f"Ollama: {ollama_url} (model: {ollama_model})")
@@ -245,6 +257,8 @@ class OllamaSignalBot:
         """Apply a config dict to in-memory state (no validation/persistence)."""
         if "ollama_model" in config:
             self.ollama_model = str(config["ollama_model"]).strip()
+        if "signal_api_url" in config:
+            self.signal_api_url = str(config["signal_api_url"]).strip().rstrip("/")
         if "ollama_url" in config:
             self.ollama_url = str(config["ollama_url"]).strip().rstrip("/")
         if "temperature" in config:
@@ -262,6 +276,7 @@ class OllamaSignalBot:
         """Return the runtime-mutable settings as a JSON-serializable dict."""
         return {
             "ollama_model": self.ollama_model,
+            "signal_api_url": self.signal_api_url,
             "ollama_url": self.ollama_url,
             "temperature": self.temperature,
             "system_prompt": self.system_prompt,
@@ -280,6 +295,10 @@ class OllamaSignalBot:
             n = int(config["max_history"])
             if n < 1:
                 raise ValueError("max_history must be at least 1")
+        if "signal_api_url" in config:
+            url = str(config["signal_api_url"]).strip()
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("Signal API URL must start with http:// or https://")
         if "ollama_url" in config:
             url = str(config["ollama_url"]).strip()
             if not url.startswith(("http://", "https://")):
@@ -311,6 +330,17 @@ class OllamaSignalBot:
             self._apply_config(data)
         except (ValueError, TypeError):
             logger.warning("Ignoring invalid persisted runtime config")
+
+    def reset_runtime_config(self) -> None:
+        """Reset runtime settings to their initial (env/default) values."""
+        self._apply_config(self._initial_config)
+        try:
+            os.remove(self.config_file)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning(f"Could not remove persisted config: {exc}")
+        logger.info("Runtime configuration reset to defaults")
 
     def get_status(self) -> dict:
         """Return a small status snapshot for the web UI."""
