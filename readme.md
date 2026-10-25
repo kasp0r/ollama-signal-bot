@@ -20,7 +20,7 @@ A self-hosted Signal bot that forwards your messages to a local [Ollama](https:/
 ## Table of contents
 
 - [Features](#features)
-- [Quick start](#quick-start)
+- [Setup](#setup)
 - [Dedicated Signal number](#dedicated-signal-number)
 - [Configuration](#configuration)
 - [Managing the bot](#managing-the-bot)
@@ -43,32 +43,81 @@ A self-hosted Signal bot that forwards your messages to a local [Ollama](https:/
 - 📡 **Auto-detection** — finds available Ollama models at startup
 - 🖥️ **Web UI** — configure the bot at runtime from a browser
 
-## Quick start
+## Setup
 
-**Prerequisites**
+### Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) + Docker Compose
-- [Python 3.10+](https://www.python.org/) (for the setup script only — no `pip install` needed)
-- A **dedicated Signal number** registered on a phone (see [below](#dedicated-signal-number))
+- A **Signal number** to use for the bot (a dedicated one is recommended — see [Dedicated Signal number](#dedicated-signal-number))
+- [Ollama](https://ollama.com) — optional; the bot can run a bundled one instead
+- Python 3.10+ — only needed if you use the `setup.py` helper (not required for the web UI path)
 
-**Install**
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/kasp0r/ollama-signal-bot.git
 cd ollama-signal-bot
-python setup.py
 ```
 
-`setup.py` is interactive and asks only a handful of questions:
+### 2. Configure (optional)
 
-1. **Ollama** — if you already run Ollama, it's detected and reused automatically; otherwise the script bundles one in Docker for you.
-2. **Phone number** — optional; if you leave it blank, it's auto-detected after you link your Signal account.
-3. **Model** — which Ollama model to use (defaults to `gemma4:latest`).
-4. **System prompt** and **allowed senders** — both optional, with sensible defaults.
+Most settings have sensible defaults and can be changed later in the web UI.
+To set any upfront, copy the example env file and edit it:
 
-It then builds and starts the containers, shows a **QR code** to link your Signal account, and starts the bot.
+```bash
+cp .env.example .env
+```
 
-That's it — send a message to the bot's number and it replies.
+See [Configuration](#configuration) for the available variables.
+
+### 3. Start the stack
+
+```bash
+docker compose up -d
+```
+
+This starts `signal-api` and the bot. If you don't have Ollama installed, add
+`--profile ollama` to also start a bundled one:
+
+```bash
+docker compose up -d --profile ollama
+```
+
+### 4. Open the web UI
+
+The bot generates an access token and prints it to the logs:
+
+```bash
+docker compose logs ollama-signal-bot | grep "Web UI token"
+```
+
+Open **http://127.0.0.1:8000** in your browser and enter that token when prompted.
+
+### 5. Link your Signal account
+
+In the web UI's **Overview** tab, scan the QR code with the Signal app on the
+bot's number (**Settings → Linked Devices → +**). The bot auto-detects the
+number and starts polling for messages.
+
+### 6. Configure the bot
+
+In the **Settings** tab, pick a model, set the system prompt, adjust the
+temperature and generation parameters, and manage the sender/admin allowlists.
+Changes apply immediately and persist across restarts.
+
+### 7. Test it
+
+Send a message to the bot's number from another Signal account. You should get
+an AI reply, and the **Overview** tab will show the activity.
+
+### Alternative: `python setup.py`
+
+Prefer a one-command, interactive setup? It detects Ollama, writes `.env`,
+builds the containers, and walks you through the QR link:
+
+```bash
+python setup.py
+```
 
 <p align="center">
   <img src="./asset/demo.gif" width="360" alt="Animated demo of the Ollama Signal Bot">
@@ -88,7 +137,7 @@ The app remains the primary device; the bot is linked to it and must stay instal
 
 ## Configuration
 
-`setup.py` writes `.env` for you. To edit it by hand instead, copy `.env.example` to `.env`:
+Most configuration is done in the **web UI** (Settings tab) and persists across restarts. For initial defaults, copy `.env.example` to `.env` and edit it:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
