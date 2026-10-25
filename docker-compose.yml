@@ -24,7 +24,7 @@ services:
     #           capabilities: [gpu]
 
   signal-api:
-    image: bbernhard/signal-cli-rest-api:0.98
+    image: bbernhard/signal-cli-rest-api:0.101
     container_name: signal-api
     environment:
       - MODE=normal
