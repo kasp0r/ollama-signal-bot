@@ -36,7 +36,7 @@ HTML = """<!DOCTYPE html>
   #link-section { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px; padding: 1rem; }
   #qr-img { width: 200px; height: 200px; }
   label { display: block; margin-top: 1rem; font-weight: 600; font-size: .9rem; }
-  input, textarea { width: 100%; padding: .5rem; margin-top: .25rem; box-sizing: border-box;
+  input, textarea, select { width: 100%; padding: .5rem; margin-top: .25rem; box-sizing: border-box;
                     font-size: .95rem; border: 1px solid #ccc; border-radius: 4px; }
   textarea { min-height: 4.5rem; resize: vertical; }
   .hint { color: #888; font-size: .8rem; margin-top: .2rem; }
@@ -79,9 +79,15 @@ HTML = """<!DOCTYPE html>
 
 <h2>Configuration</h2>
 <form id="form" onsubmit="saveConfig(event)">
+  <label for="ollama_url">Ollama URL</label>
+  <input id="ollama_url" type="text">
+  <div class="hint">Local or remote Ollama server, e.g. <code>http://host.docker.internal:11434</code>.</div>
+
   <label for="ollama_model">Model</label>
-  <input id="ollama_model" type="text">
-  <div class="hint">Leave empty to auto-detect the first available model.</div>
+  <select id="ollama_model">
+    <option value="">Auto-detect</option>
+  </select>
+  <div class="hint">Auto-detects the first available model, or pick one.</div>
 
   <label for="temperature">Temperature</label>
   <input id="temperature" type="number" step="0.1" min="0" max="2">
@@ -128,8 +134,23 @@ function showMessage(text, isError) {
 function showToken() { document.getElementById('token-row').style.display = 'block'; }
 function hideToken() { document.getElementById('token-row').style.display = 'none'; }
 
+function setModelSelect(value) {
+  const sel = document.getElementById('ollama_model');
+  if (!value) { sel.value = ''; return; }
+  let found = false;
+  for (const opt of sel.options) { if (opt.value === value) { found = true; break; } }
+  if (!found) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = value;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+}
+
 function fillForm(cfg) {
-  document.getElementById('ollama_model').value = cfg.ollama_model || '';
+  document.getElementById('ollama_url').value = cfg.ollama_url || '';
+  setModelSelect(cfg.ollama_model || '');
   document.getElementById('temperature').value = cfg.temperature ?? 0.7;
   document.getElementById('system_prompt').value = cfg.system_prompt || '';
   document.getElementById('max_history').value = cfg.max_history ?? 50;
@@ -137,14 +158,9 @@ function fillForm(cfg) {
   document.getElementById('allowed_admins').value = cfg.allowed_admins || '*';
 }
 
-function timeAgo(iso) {
-  const t = Date.parse(iso);
-  if (!t) return 'never';
-  const s = Math.floor((Date.now() - t) / 1000);
-  if (s < 60) return s + 's ago';
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + 'm ago';
-  return Math.floor(m / 60) + 'h ago';
+function formatDateTime(iso) {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? 'unknown' : d.toLocaleString();
 }
 
 function renderStatus(s) {
@@ -165,7 +181,7 @@ function renderStatus(s) {
 
   document.getElementById('status-model').textContent = s.model || 'none';
   document.getElementById('status-last').textContent =
-    s.last_message_at ? (timeAgo(s.last_message_at) + ' from ' + (s.last_message_sender || '?')) : 'none yet';
+    s.last_message_at ? (formatDateTime(s.last_message_at) + ' from ' + (s.last_message_sender || '?')) : 'none yet';
 
   // Show the linking section only when the account isn't linked.
   const linkSection = document.getElementById('link-section');
@@ -197,6 +213,25 @@ async function loadConfig() {
   } catch (e) { /* transient */ }
 }
 
+async function loadModels() {
+  try {
+    const r = await fetch('/api/models', {headers: headers()});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) return;
+    const models = await r.json();
+    const sel = document.getElementById('ollama_model');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Auto-detect</option>';
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      sel.appendChild(opt);
+    }
+    setModelSelect(current);
+  } catch (e) { /* transient */ }
+}
+
 async function loadQR() {
   try {
     const r = await fetch('/api/link/qr', {headers: headers()});
@@ -210,6 +245,7 @@ async function loadQR() {
 async function saveConfig(e) {
   e.preventDefault();
   const payload = {
+    ollama_url: document.getElementById('ollama_url').value.trim(),
     ollama_model: document.getElementById('ollama_model').value.trim(),
     temperature: parseFloat(document.getElementById('temperature').value),
     system_prompt: document.getElementById('system_prompt').value,
@@ -232,15 +268,19 @@ async function saveConfig(e) {
 function saveToken() {
   token = document.getElementById('token').value.trim();
   localStorage.setItem(TOKEN_KEY, token);
+  loadModels();
   loadConfig();
   refreshStatus();
   loadQR();
 }
 
-loadConfig();
-refreshStatus();
-loadQR();
-setInterval(refreshStatus, 3000);
+(async function init() {
+  await loadModels();
+  await loadConfig();
+  await refreshStatus();
+  loadQR();
+  setInterval(refreshStatus, 3000);
+})();
 </script>
 </body>
 </html>
@@ -270,6 +310,11 @@ async def _status(request):
     status = bot.get_status()
     status["dependencies"] = await bot.check_dependencies()
     return web.json_response(status)
+
+
+async def _models(request):
+    bot = request.app[_BOT_KEY]
+    return web.json_response(await bot.get_available_models())
 
 
 async def _link_qr(request):
@@ -313,6 +358,7 @@ def create_app(bot, token=None):
     app.router.add_get("/", _index)
     app.router.add_get("/api/status", _status)
     app.router.add_get("/api/link/qr", _link_qr)
+    app.router.add_get("/api/models", _models)
     app.router.add_get("/api/config", _get_config)
     app.router.add_put("/api/config", _put_config)
     return app

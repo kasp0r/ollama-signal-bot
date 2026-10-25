@@ -213,6 +213,8 @@ class OllamaSignalBot:
         """Apply a config dict to in-memory state (no validation/persistence)."""
         if "ollama_model" in config:
             self.ollama_model = str(config["ollama_model"]).strip()
+        if "ollama_url" in config:
+            self.ollama_url = str(config["ollama_url"]).strip().rstrip("/")
         if "temperature" in config:
             self.temperature = float(config["temperature"])
         if "system_prompt" in config:
@@ -228,6 +230,7 @@ class OllamaSignalBot:
         """Return the runtime-mutable settings as a JSON-serializable dict."""
         return {
             "ollama_model": self.ollama_model,
+            "ollama_url": self.ollama_url,
             "temperature": self.temperature,
             "system_prompt": self.system_prompt,
             "max_history": self.max_history,
@@ -245,6 +248,10 @@ class OllamaSignalBot:
             n = int(config["max_history"])
             if n < 1:
                 raise ValueError("max_history must be at least 1")
+        if "ollama_url" in config:
+            url = str(config["ollama_url"]).strip()
+            if not url.startswith(("http://", "https://")):
+                raise ValueError("Ollama URL must start with http:// or https://")
         self._apply_config(config)
         self.save_runtime_config()
 
@@ -974,6 +981,13 @@ class OllamaSignalBot:
         first_model = models[0].get("name", "")
         logger.info(f"Auto-detected model: '{first_model}'")
         self.ollama_model = first_model
+
+    async def get_available_models(self) -> list[str]:
+        """Return the names of available Ollama models."""
+        data = await self.ollama_get("/api/tags")
+        if not data:
+            return []
+        return [m.get("name", "") for m in data.get("models", [])]
 
     async def run(self):
         """Main polling loop."""

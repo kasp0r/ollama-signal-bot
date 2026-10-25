@@ -472,6 +472,7 @@ def test_get_runtime_config():
     bot = _make_bot()
     cfg = bot.get_runtime_config()
     assert cfg["ollama_model"] == "gemma4:latest"
+    assert cfg["ollama_url"] == "http://ollama:11434"
     assert cfg["temperature"] == 0.7
     assert cfg["allowed_senders"] == "*"
     assert cfg["max_history"] == 50
@@ -505,6 +506,26 @@ def test_apply_runtime_config_validation():
         bot.apply_runtime_config({"temperature": 5.0})
     with pytest.raises(ValueError):
         bot.apply_runtime_config({"max_history": 0})
+
+
+def test_apply_runtime_config_ollama_url():
+    bot = _make_bot()
+    bot.apply_runtime_config({"ollama_url": "http://192.168.1.50:11434"})
+    assert bot.ollama_url == "http://192.168.1.50:11434"
+
+
+def test_apply_runtime_config_invalid_ollama_url():
+    bot = _make_bot()
+    with pytest.raises(ValueError):
+        bot.apply_runtime_config({"ollama_url": "not-a-url"})
+
+
+def test_get_available_models():
+    def handler(request):
+        return httpx.Response(200, json={"models": [{"name": "a"}, {"name": "b"}]})
+
+    bot = _mock_bot(handler)
+    assert asyncio.run(bot.get_available_models()) == ["a", "b"]
 
 
 def test_config_persistence(tmp_path):
