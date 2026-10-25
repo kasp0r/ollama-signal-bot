@@ -283,6 +283,6 @@ See [NOTICE](NOTICE) for full details. This project itself is licensed under the
 
 ---
 
-**Author:** Rudi Ball
+**Author:** Rudi B
 
 See [CHANGELOG.md](CHANGELOG.md) for a full history of changes.
