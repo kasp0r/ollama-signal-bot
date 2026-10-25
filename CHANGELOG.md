@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Animated demo GIF and Open Graph social-preview image.
 - Ollama generation options (`num_predict` limit and configurable `temperature`).
 - Docker healthcheck for the bot container.
+- `Makefile` with `make` shortcuts for common tasks.
 
 ### Changed
 

@@ -121,6 +121,8 @@ git pull && docker compose build && docker compose up -d   # update to the lates
 
 `docker compose ps` shows a health status for the bot (healthy/unhealthy).
 
+These commands are also available as `make` shortcuts — run `make` to list them all: `make up`, `make down`, `make logs`, `make restart`, `make test`, `make model-pull MODEL=...`, and more.
+
 ## Bot commands
 
 Send any of these to the bot's number (one-to-one chats only — group messages are ignored):
