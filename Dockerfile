@@ -8,7 +8,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py ./
+COPY main.py webui.py ./
+
+# Runtime config directory (mounted as a volume), writable by the app user.
+RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
 
 USER appuser
 

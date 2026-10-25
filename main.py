@@ -6,6 +6,7 @@ Supports conversation memory and slash commands.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -17,6 +18,8 @@ from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
+
+import webui
 
 load_dotenv()
 
@@ -39,6 +42,8 @@ DEFAULT_TEMPERATURE = 0.7     # Ollama sampling temperature
 RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
 RATE_LIMIT_WINDOW_SECONDS = 60
 HEARTBEAT_FILE = "/tmp/ollama-signal-bot.heartbeat"
+CONFIG_FILE = "/app/data/config.json"
+WEBUI_PORT = 8000  # internal web UI port (host mapping set in docker-compose.yml)
 
 
 def _touch_heartbeat() -> None:
@@ -117,6 +122,7 @@ class OllamaSignalBot:
         allowed_senders: str = "*",
         allowed_admins: str = "*",
         temperature: float = DEFAULT_TEMPERATURE,
+        config_file: str = CONFIG_FILE,
     ):
         self.phone_number = phone_number
         self.signal_api_url = signal_api_url.rstrip("/")
@@ -126,6 +132,7 @@ class OllamaSignalBot:
         self.temperature = temperature
         self.client = httpx.AsyncClient(timeout=180.0)
         self.max_history = MAX_HISTORY
+        self.config_file = config_file
 
         # Sender allowlist: "*" means allow everyone, otherwise a set of phone numbers
         if allowed_senders.strip() == "*" or not allowed_senders.strip():
@@ -185,6 +192,91 @@ class OllamaSignalBot:
             return True
         recent.append(now)
         return False
+
+    # ── Runtime configuration ───────────────────────────────────────
+
+    def _senders_to_str(self, senders) -> str:
+        if senders is None:
+            return "*"
+        return ",".join(sorted(senders))
+
+    def _str_to_senders(self, value):
+        value = str(value).strip()
+        if value == "*" or not value:
+            return None
+        return {s.strip() for s in value.split(",") if s.strip()}
+
+    def _apply_config(self, config: dict) -> None:
+        """Apply a config dict to in-memory state (no validation/persistence)."""
+        if "ollama_model" in config:
+            self.ollama_model = str(config["ollama_model"]).strip()
+        if "temperature" in config:
+            self.temperature = float(config["temperature"])
+        if "system_prompt" in config:
+            self.system_prompt = str(config["system_prompt"])
+        if "max_history" in config:
+            self.max_history = int(config["max_history"])
+        if "allowed_senders" in config:
+            self.allowed_senders = self._str_to_senders(config["allowed_senders"])
+        if "allowed_admins" in config:
+            self.allowed_admins = self._str_to_senders(config["allowed_admins"])
+
+    def get_runtime_config(self) -> dict:
+        """Return the runtime-mutable settings as a JSON-serializable dict."""
+        return {
+            "ollama_model": self.ollama_model,
+            "temperature": self.temperature,
+            "system_prompt": self.system_prompt,
+            "max_history": self.max_history,
+            "allowed_senders": self._senders_to_str(self.allowed_senders),
+            "allowed_admins": self._senders_to_str(self.allowed_admins),
+        }
+
+    def apply_runtime_config(self, config: dict) -> None:
+        """Validate, apply, and persist runtime-mutable settings."""
+        if "temperature" in config:
+            t = float(config["temperature"])
+            if not 0.0 <= t <= 2.0:
+                raise ValueError("temperature must be between 0.0 and 2.0")
+        if "max_history" in config:
+            n = int(config["max_history"])
+            if n < 1:
+                raise ValueError("max_history must be at least 1")
+        self._apply_config(config)
+        self.save_runtime_config()
+
+    def save_runtime_config(self) -> None:
+        """Persist the current runtime-mutable settings to disk."""
+        try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(self.get_runtime_config(), f, indent=2)
+        except OSError as e:
+            logger.warning(f"Could not persist runtime config: {e}")
+
+    def load_runtime_config(self) -> None:
+        """Load persisted runtime settings, overriding env defaults."""
+        try:
+            with open(self.config_file, encoding="utf-8") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            self._apply_config(data)
+        except (ValueError, TypeError):
+            logger.warning("Ignoring invalid persisted runtime config")
+
+    def get_status(self) -> dict:
+        """Return a small status snapshot for the web UI."""
+        uptime = datetime.now(timezone.utc) - START_TIME
+        return {
+            "model": self.ollama_model or None,
+            "uptime_seconds": int(uptime.total_seconds()),
+            "active_chats": sum(1 for v in self.conversations.values() if v),
+            "messages_in_memory": sum(len(v) for v in self.conversations.values()),
+        }
 
     # ── Ollama API helpers ──────────────────────────────────────────
 
@@ -859,6 +951,9 @@ async def main():
     except ValueError:
         temperature = DEFAULT_TEMPERATURE
 
+    webui_token = os.getenv("WEBUI_TOKEN", "") or None
+    webui_port = WEBUI_PORT
+
     if not phone_number:
         logger.error("SIGNAL_PHONE_NUMBER is required. Set it in .env")
         sys.exit(1)
@@ -874,11 +969,19 @@ async def main():
         temperature=temperature,
     )
 
+    # Apply any persisted runtime configuration (overrides env defaults).
+    bot.load_runtime_config()
+
+    # Start the web UI in the same event loop.
+    cleanup = await webui.start_server(bot, "0.0.0.0", webui_port, webui_token)
+    logger.info(f"Web UI listening on port {webui_port}")
+
     try:
         await bot.run()
     except asyncio.CancelledError:
         logger.info("Shutting down...")
     finally:
+        await cleanup()
         await bot.stop()
 
 

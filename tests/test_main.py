@@ -7,8 +7,11 @@ import asyncio
 import json
 
 import httpx
+import pytest
+from aiohttp.test_utils import TestClient, TestServer
 
 import main
+import webui
 
 
 # ── format_for_signal (Markdown → plain text) ─────────────────────
@@ -74,7 +77,7 @@ def test_snake_case_not_italicized():
 
 # ── sender allowlist ──────────────────────────────────────────────
 
-def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_TEMPERATURE):
+def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_TEMPERATURE, config_file="/tmp/osb-test-config.json"):
     return main.OllamaSignalBot(
         phone_number="+15551234567",
         signal_api_url="http://signal-api:8080",
@@ -82,6 +85,7 @@ def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_
         allowed_senders=allowed_senders,
         allowed_admins=allowed_admins,
         temperature=temperature,
+        config_file=config_file,
     )
 
 
@@ -460,3 +464,117 @@ def test_query_ollama_sends_generation_options():
 def test_temperature_configurable():
     bot = _make_bot(temperature=0.3)
     assert bot.temperature == 0.3
+
+
+# ── runtime config (web UI) ───────────────────────────────────────
+
+def test_get_runtime_config():
+    bot = _make_bot()
+    cfg = bot.get_runtime_config()
+    assert cfg["ollama_model"] == "gemma4:latest"
+    assert cfg["temperature"] == 0.7
+    assert cfg["allowed_senders"] == "*"
+    assert cfg["max_history"] == 50
+
+
+def test_senders_roundtrip():
+    bot = _make_bot()
+    bot.allowed_senders = {"+111", "+222"}
+    assert bot._senders_to_str(bot.allowed_senders) == "+111,+222"
+    assert bot._str_to_senders("+111,+222") == {"+111", "+222"}
+    assert bot._str_to_senders("*") is None
+
+
+def test_apply_runtime_config():
+    bot = _make_bot()
+    bot.apply_runtime_config({
+        "ollama_model": "llama3.2:latest",
+        "temperature": 0.3,
+        "max_history": 100,
+        "allowed_senders": "+111",
+    })
+    assert bot.ollama_model == "llama3.2:latest"
+    assert bot.temperature == 0.3
+    assert bot.max_history == 100
+    assert bot.allowed_senders == {"+111"}
+
+
+def test_apply_runtime_config_validation():
+    bot = _make_bot()
+    with pytest.raises(ValueError):
+        bot.apply_runtime_config({"temperature": 5.0})
+    with pytest.raises(ValueError):
+        bot.apply_runtime_config({"max_history": 0})
+
+
+def test_config_persistence(tmp_path):
+    cfg = tmp_path / "config.json"
+    bot = _make_bot(config_file=str(cfg))
+    bot.apply_runtime_config({"ollama_model": "custom", "temperature": 0.2, "max_history": 42})
+
+    bot2 = _make_bot(config_file=str(cfg))
+    bot2.load_runtime_config()
+    assert bot2.ollama_model == "custom"
+    assert bot2.temperature == 0.2
+    assert bot2.max_history == 42
+
+
+def test_get_status():
+    bot = _make_bot()
+    status = bot.get_status()
+    assert status["model"] == "gemma4:latest"
+    assert "uptime_seconds" in status
+    assert status["active_chats"] == 0
+
+
+def test_webui_get_config():
+    bot = _make_bot()
+
+    async def run():
+        server = TestServer(webui.create_app(bot))
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.get("/api/config")
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["ollama_model"] == "gemma4:latest"
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_webui_put_config():
+    bot = _make_bot()
+
+    async def run():
+        server = TestServer(webui.create_app(bot))
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.put("/api/config", json={"temperature": 0.5})
+            assert resp.status == 200
+            assert (await resp.json())["temperature"] == 0.5
+            assert bot.temperature == 0.5
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
+def test_webui_auth():
+    bot = _make_bot()
+
+    async def run():
+        server = TestServer(webui.create_app(bot, token="secret"))
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            assert (await client.get("/api/config")).status == 401
+            ok = await client.get("/api/config", headers={"Authorization": "Bearer secret"})
+            assert ok.status == 200
+        finally:
+            await client.close()
+
+    asyncio.run(run())

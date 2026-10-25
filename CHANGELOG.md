@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ollama generation options (`num_predict` limit and configurable `temperature`).
 - Docker healthcheck for the bot container.
 - `Makefile` with `make` shortcuts for common tasks.
+- Web UI for runtime configuration (persisted to a volume, optional token auth).
 
 ### Changed
 

@@ -42,6 +42,11 @@ services:
       - SIGNAL_API_URL=http://signal-api:8080
     env_file:
       - .env
+    ports:
+      # Web UI — bound to localhost only. Open http://127.0.0.1:8000
+      - "127.0.0.1:${WEBUI_PORT:-8000}:8000"
+    volumes:
+      - bot-data:/app/data
     # Lets http://host.docker.internal:11434 reach a host-installed Ollama
     # on Linux too (not just Docker Desktop).
     extra_hosts:
@@ -59,3 +64,4 @@ services:
 volumes:
   signal-cli-data:
   ollama-data:
+  bot-data:

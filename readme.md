@@ -24,6 +24,7 @@ A self-hosted Signal bot that forwards your messages to a local [Ollama](https:/
 - [Dedicated Signal number](#dedicated-signal-number)
 - [Configuration](#configuration)
 - [Managing the bot](#managing-the-bot)
+- [Web UI](#web-ui)
 - [Bot commands](#bot-commands)
 - [How it works](#how-it-works)
 - [Privacy](#privacy)
@@ -40,6 +41,7 @@ A self-hosted Signal bot that forwards your messages to a local [Ollama](https:/
 - 📊 **Telemetry mode** — token counts, speed, and timing per response
 - 🔒 **Sender allowlist** — restrict access to specific numbers
 - 📡 **Auto-detection** — finds available Ollama models at startup
+- 🖥️ **Web UI** — configure the bot at runtime from a browser
 
 ## Quick start
 
@@ -97,6 +99,8 @@ The app remains the primary device; the bot is linked to it and must stay instal
 | `SYSTEM_PROMPT` | No | `You are a helpful assistant.` | System prompt for every reply |
 | `ALLOWED_SENDERS` | No | `*` | `*` = everyone, or comma-separated numbers |
 | `ALLOWED_ADMINS` | No | `*` | Who can run admin commands (`*` = everyone, or numbers) |
+| `WEBUI_TOKEN` | No | (none) | Secret required to use the web UI (empty = no auth) |
+| `WEBUI_PORT` | No | `8000` | Host port for the web UI |
 
 ### Ollama: Docker or your own?
 
@@ -122,6 +126,21 @@ git pull && docker compose build && docker compose up -d   # update to the lates
 `docker compose ps` shows a health status for the bot (healthy/unhealthy).
 
 These commands are also available as `make` shortcuts — run `make` to list them all: `make up`, `make down`, `make logs`, `make restart`, `make test`, `make model-pull MODEL=...`, and more.
+
+## Web UI
+
+The bot serves a small web UI for runtime configuration. Open it at:
+
+```
+http://127.0.0.1:8000
+```
+
+It lets you change the model, temperature, system prompt, history limit, and
+allowlists — changes apply immediately and persist across restarts (stored in
+the `bot-data` volume).
+
+By default the UI is bound to `127.0.0.1` (localhost only). To require a
+password, set `WEBUI_TOKEN` in `.env`; the UI will then prompt for it.
 
 ## Bot commands
 
