@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import signal
+import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -46,6 +47,7 @@ RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
 RATE_LIMIT_WINDOW_SECONDS = 60
 HEARTBEAT_FILE = "/tmp/ollama-signal-bot.heartbeat"
 CONFIG_FILE = "/app/data/config.json"
+HISTORY_DB_FILE = "/app/data/history.db"
 WEBUI_TOKEN_FILE = "/app/data/webui-token"
 WEBUI_PORT = 8000  # internal web UI port (host mapping set in docker-compose.yml)
 
@@ -160,6 +162,7 @@ class OllamaSignalBot:
         top_p: float = DEFAULT_TOP_P,
         top_k: int = DEFAULT_TOP_K,
         config_file: str = CONFIG_FILE,
+        history_db_file: str = HISTORY_DB_FILE,
     ):
         self.phone_number = phone_number
         self.signal_api_url = signal_api_url.rstrip("/")
@@ -173,6 +176,9 @@ class OllamaSignalBot:
         self.client = httpx.AsyncClient(timeout=180.0)
         self.max_history = MAX_HISTORY
         self.config_file = config_file
+        self.history_db_file = history_db_file
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
         # Sender allowlist: "*" means allow everyone, otherwise a set of phone numbers
         if allowed_senders.strip() == "*" or not allowed_senders.strip():
@@ -200,6 +206,8 @@ class OllamaSignalBot:
         # Last received message (for status/monitoring)
         self.last_message_at: datetime | None = None
         self.last_message_sender: str | None = None
+
+        self._init_db()
 
         # Snapshot of the initial (env/default) config, for "reset to defaults".
         self._initial_config = {
@@ -386,6 +394,110 @@ class OllamaSignalBot:
             "last_message_sender": self.last_message_sender,
         }
 
+    # ── History persistence & stats ─────────────────────────────────
+
+    def _init_db(self) -> None:
+        """Initialize the SQLite history database and load existing history."""
+        self.db = None
+        try:
+            if self.history_db_file == ":memory:":
+                self.db = sqlite3.connect(":memory:", check_same_thread=False)
+            else:
+                os.makedirs(os.path.dirname(self.history_db_file), exist_ok=True)
+                self.db = sqlite3.connect(self.history_db_file, check_same_thread=False)
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS messages ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "sender TEXT NOT NULL, "
+                "role TEXT NOT NULL, "
+                "content TEXT NOT NULL, "
+                "created_at TEXT NOT NULL)"
+            )
+            self.db.execute("CREATE INDEX IF NOT EXISTS idx_sender ON messages(sender)")
+            self.db.commit()
+            self._load_history()
+        except (OSError, sqlite3.Error) as exc:
+            logger.warning(f"Could not initialize history DB; using in-memory only: {exc}")
+            self.db = None
+
+    def _load_history(self) -> None:
+        """Load recent conversation history from the database into memory."""
+        if self.db is None:
+            return
+        try:
+            rows = self.db.execute(
+                "SELECT sender, role, content FROM messages ORDER BY id"
+            ).fetchall()
+        except sqlite3.Error:
+            return
+        for sender, role, content in rows:
+            self.conversations[sender].append({"role": role, "content": content})
+        for sender in list(self.conversations):
+            limit = self.max_history * 2
+            if len(self.conversations[sender]) > limit:
+                self.conversations[sender] = self.conversations[sender][-limit:]
+
+    def _persist_message(self, sender: str, role: str, content: str) -> None:
+        """Persist a message to the history DB (if available), pruning old ones."""
+        if self.db is None:
+            return
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            self.db.execute(
+                "INSERT INTO messages (sender, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (sender, role, content, now),
+            )
+            limit = self.max_history * 2
+            self.db.execute(
+                "DELETE FROM messages WHERE sender = ? AND id NOT IN ("
+                "SELECT id FROM messages WHERE sender = ? ORDER BY id DESC LIMIT ?)",
+                (sender, sender, limit),
+            )
+            self.db.commit()
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not persist message: {exc}")
+
+    def _clear_sender_db(self, sender: str) -> None:
+        """Remove a sender's history from the database."""
+        if self.db is None:
+            return
+        try:
+            self.db.execute("DELETE FROM messages WHERE sender = ?", (sender,))
+            self.db.commit()
+        except sqlite3.Error as exc:
+            logger.warning(f"Could not clear history for {sender}: {exc}")
+
+    def clear_sender_history(self, sender: str) -> int:
+        """Clear a sender's conversation history. Returns the number cleared."""
+        count = len(self.conversations.get(sender, []))
+        self.conversations[sender].clear()
+        self._clear_sender_db(sender)
+        return count
+
+    def get_stats(self) -> dict:
+        """Return usage statistics."""
+        per_user = {}
+        if self.db is not None:
+            try:
+                rows = self.db.execute(
+                    "SELECT sender, COUNT(*) FROM messages GROUP BY sender"
+                ).fetchall()
+                per_user = {sender: {"messages": count} for sender, count in rows}
+            except sqlite3.Error:
+                per_user = {}
+        if not per_user:
+            per_user = {
+                sender: {"messages": len(msgs)}
+                for sender, msgs in self.conversations.items() if msgs
+            }
+        return {
+            "total_messages": sum(p["messages"] for p in per_user.values()),
+            "active_users": len(per_user),
+            "total_tokens_in": self.total_prompt_tokens,
+            "total_tokens_out": self.total_completion_tokens,
+            "per_user": per_user,
+        }
+
     # ── Ollama API helpers ──────────────────────────────────────────
 
     async def query_ollama(self, sender: str, prompt: str) -> str:
@@ -399,8 +511,9 @@ class OllamaSignalBot:
             )
 
         try:
-            # Append user message to history
+            # Append user message to history (and persist)
             self.conversations[sender].append({"role": "user", "content": prompt})
+            self._persist_message(sender, "user", prompt)
 
             # Trim history if it exceeds the limit
             if len(self.conversations[sender]) > self.max_history * 2:
@@ -429,12 +542,17 @@ class OllamaSignalBot:
             result = response.json()
             answer = result.get("message", {}).get("content", "No response from model.")
 
+            # Track cumulative token usage for stats
+            self.total_prompt_tokens += result.get("prompt_eval_count", 0)
+            self.total_completion_tokens += result.get("eval_count", 0)
+
             # Cap the response length to avoid flooding Signal
             if len(answer) > MAX_OUTPUT_LENGTH:
                 answer = answer[:MAX_OUTPUT_LENGTH] + "…"
 
-            # Append assistant response to history
+            # Append assistant response to history (and persist)
             self.conversations[sender].append({"role": "assistant", "content": answer})
+            self._persist_message(sender, "assistant", answer)
 
             logger.info(f"Ollama response length: {len(answer)}")
 
@@ -577,8 +695,7 @@ class OllamaSignalBot:
 
     async def cmd_reset(self, sender: str) -> str:
         """Clear conversation history for the sender."""
-        msg_count = len(self.conversations[sender])
-        self.conversations[sender].clear()
+        msg_count = self.clear_sender_history(sender)
         logger.info(f"Conversation reset for {sender} ({msg_count} messages cleared)")
         return f"🗑️ Conversation cleared ({msg_count} messages removed)."
 
@@ -1085,12 +1202,37 @@ class OllamaSignalBot:
         logger.info(f"Auto-detected model: '{first_model}'")
         self.ollama_model = first_model
 
-    async def get_available_models(self) -> list[str]:
-        """Return the names of available Ollama models."""
+    async def get_available_models(self) -> list[dict]:
+        """Return available Ollama models with size and quantization info."""
         data = await self.ollama_get("/api/tags")
         if not data:
             return []
-        return [m.get("name", "") for m in data.get("models", [])]
+        models = []
+        for m in data.get("models", []):
+            details = m.get("details") or {}
+            models.append({
+                "name": m.get("name", ""),
+                "size_gb": round(m.get("size", 0) / (1024 ** 3), 1),
+                "quantization": details.get("quantization_level", ""),
+                "parameter_size": details.get("parameter_size", ""),
+            })
+        return models
+
+    async def pull_model(self, name: str) -> bool:
+        """Pull a model into Ollama. Returns True on success."""
+        name = (name or "").strip()
+        if not name:
+            return False
+        try:
+            r = await self.client.post(
+                f"{self.ollama_url}/api/pull",
+                json={"name": name, "stream": False},
+                timeout=600.0,
+            )
+            return r.status_code == 200
+        except Exception as e:
+            logger.error(f"Model pull failed for '{name}': {e}")
+            return False
 
     async def run(self):
         """Main polling loop."""

@@ -77,7 +77,7 @@ def test_snake_case_not_italicized():
 
 # ── sender allowlist ──────────────────────────────────────────────
 
-def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_TEMPERATURE, config_file="/tmp/osb-test-config.json"):
+def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_TEMPERATURE, config_file="/tmp/osb-test-config.json", history_db_file=":memory:"):
     return main.OllamaSignalBot(
         phone_number="+15551234567",
         signal_api_url="http://signal-api:8080",
@@ -86,6 +86,7 @@ def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_
         allowed_admins=allowed_admins,
         temperature=temperature,
         config_file=config_file,
+        history_db_file=history_db_file,
     )
 
 
@@ -546,10 +547,19 @@ def test_apply_runtime_config_invalid_signal_api_url():
 
 def test_get_available_models():
     def handler(request):
-        return httpx.Response(200, json={"models": [{"name": "a"}, {"name": "b"}]})
+        return httpx.Response(200, json={
+            "models": [
+                {"name": "a", "size": 1024 ** 3, "details": {"quantization_level": "Q4_K_M", "parameter_size": "7B"}},
+                {"name": "b", "size": 2 * 1024 ** 3, "details": {}},
+            ]
+        })
 
     bot = _mock_bot(handler)
-    assert asyncio.run(bot.get_available_models()) == ["a", "b"]
+    models = asyncio.run(bot.get_available_models())
+    assert models[0]["name"] == "a"
+    assert models[0]["size_gb"] == 1.0
+    assert models[0]["quantization"] == "Q4_K_M"
+    assert models[1]["name"] == "b"
 
 
 def test_reset_runtime_config(tmp_path):
@@ -587,6 +597,59 @@ def test_resolve_webui_token_loads_existing(monkeypatch, tmp_path):
     token_file.write_text("persistedtoken123")
     monkeypatch.setattr(main, "WEBUI_TOKEN_FILE", str(token_file))
     assert main._resolve_webui_token() == "persistedtoken123"
+
+
+# ── SQLite history & stats ────────────────────────────────────────
+
+def test_history_persistence(tmp_path):
+    db = tmp_path / "history.db"
+
+    def handler(request):
+        return httpx.Response(200, json={
+            "message": {"content": "hi there"},
+            "prompt_eval_count": 5,
+            "eval_count": 3,
+        })
+
+    bot = _make_bot(history_db_file=str(db))
+    bot.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    asyncio.run(bot.query_ollama("+123", "hello"))
+    assert [m["content"] for m in bot.conversations["+123"]] == ["hello", "hi there"]
+
+    # A new bot reading the same DB should load the history.
+    bot2 = _make_bot(history_db_file=str(db))
+    assert [m["content"] for m in bot2.conversations["+123"]] == ["hello", "hi there"]
+
+
+def test_clear_sender_history(tmp_path):
+    db = tmp_path / "history.db"
+    bot = _make_bot(history_db_file=str(db))
+    bot.conversations["+123"] = [
+        {"role": "user", "content": "a"},
+        {"role": "assistant", "content": "b"},
+    ]
+    bot._persist_message("+123", "user", "a")
+    bot._persist_message("+123", "assistant", "b")
+
+    assert bot.clear_sender_history("+123") == 2
+    assert bot.conversations["+123"] == []
+    assert bot.get_stats()["total_messages"] == 0
+
+
+def test_stats_tracks_tokens():
+    def handler(request):
+        return httpx.Response(200, json={
+            "message": {"content": "ok"},
+            "prompt_eval_count": 10,
+            "eval_count": 5,
+        })
+
+    bot = _mock_bot(handler)
+    asyncio.run(bot.query_ollama("+123", "hi"))
+    stats = bot.get_stats()
+    assert stats["total_tokens_in"] == 10
+    assert stats["total_tokens_out"] == 5
+    assert stats["total_messages"] == 2
 
 
 def test_config_persistence(tmp_path):

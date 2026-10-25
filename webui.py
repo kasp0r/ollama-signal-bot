@@ -48,11 +48,19 @@ HTML = """<!DOCTYPE html>
   #message.ok { color: #188038; }
   #message.err { color: #188038; color: #b00020; }
   code { background: #f2f2f2; padding: .1rem .3rem; border-radius: 3px; }
+  body.dark { background: #1a1a1a; color: #e6e6e6; }
+  body.dark .sub, body.dark .hint, body.dark .muted { color: #999; }
+  body.dark h2 { border-bottom-color: #333; }
+  body.dark input, body.dark textarea, body.dark select { background: #2a2a2a; color: #e6e6e6; border-color: #444; }
+  body.dark #link-section { background: #242424; border-color: #333; }
+  body.dark code { background: #2a2a2a; }
+  .theme-toggle { margin-top: 1rem; padding: .4rem .8rem; background: #444; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
 </style>
 </head>
 <body>
 <h1>Ollama Signal Bot</h1>
 <p class="sub">Configure and monitor the bot. Changes apply immediately and persist across restarts.</p>
+<button type="button" class="theme-toggle" onclick="toggleTheme()">🌙 Toggle dark mode</button>
 
 <div id="token-row">
   <label for="token">Access token</label>
@@ -68,6 +76,16 @@ HTML = """<!DOCTYPE html>
   <div class="status-row"><span class="dot ok" style="background:#555"></span> Model <span class="muted" id="status-model">—</span></div>
   <div class="status-row"><span class="dot ok" style="background:#555"></span> Last message <span class="muted" id="status-last">—</span></div>
 </div>
+
+<h2>Stats</h2>
+<div id="stats">
+  <div class="status-row"><span class="muted">Total messages:</span> <span id="stat-messages">—</span></div>
+  <div class="status-row"><span class="muted">Active users:</span> <span id="stat-users">—</span></div>
+  <div class="status-row"><span class="muted">Tokens in / out:</span> <span id="stat-tokens">—</span></div>
+</div>
+
+<h2>Conversations</h2>
+<div id="conversations" class="muted">loading…</div>
 
 <div id="link-section" style="display:none">
   <h2>Link your Signal account</h2>
@@ -92,6 +110,13 @@ HTML = """<!DOCTYPE html>
     <option value="">Auto-detect</option>
   </select>
   <div class="hint">Auto-detects the first available model, or pick one.</div>
+
+  <label for="pull_model">Pull model</label>
+  <div style="display:flex; gap:.5rem;">
+    <input id="pull_model" type="text" placeholder="e.g. llama3.2:latest">
+    <button type="button" class="secondary" onclick="pullModel()">Pull</button>
+  </div>
+  <div class="hint">Downloads a model into Ollama (may take a while for large models).</div>
 
   <label for="temperature">Temperature</label>
   <input id="temperature" type="number" step="0.1" min="0" max="2">
@@ -247,8 +272,9 @@ async function loadModels() {
     sel.innerHTML = '<option value="">Auto-detect</option>';
     for (const m of models) {
       const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = m;
+      opt.value = m.name;
+      const extra = [m.parameter_size, m.quantization].filter(Boolean).join(' ');
+      opt.textContent = m.name + (extra ? '  (' + extra + ')' : '') + '  [' + m.size_gb + ' GB]';
       sel.appendChild(opt);
     }
     setModelSelect(current);
@@ -303,19 +329,89 @@ async function resetConfig() {
   } catch (e) { showMessage('Reset failed: ' + e, true); }
 }
 
+function toggleTheme() {
+  const dark = document.body.classList.toggle('dark');
+  localStorage.setItem('osb_theme', dark ? 'dark' : 'light');
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/stats', {headers: headers()});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) return;
+    const s = await r.json();
+    document.getElementById('stat-messages').textContent = s.total_messages;
+    document.getElementById('stat-users').textContent = s.active_users;
+    document.getElementById('stat-tokens').textContent = s.total_tokens_in + ' / ' + s.total_tokens_out;
+    renderConversations(s.per_user || {});
+  } catch (e) { /* transient */ }
+}
+
+function renderConversations(perUser) {
+  const el = document.getElementById('conversations');
+  const senders = Object.keys(perUser);
+  if (!senders.length) {
+    el.innerHTML = '<span class="muted">No conversations yet.</span>';
+    return;
+  }
+  el.innerHTML = '';
+  for (const sender of senders) {
+    const row = document.createElement('div');
+    row.className = 'status-row';
+    const label = document.createElement('span');
+    label.textContent = sender + '  (' + perUser[sender].messages + ' messages)';
+    row.appendChild(label);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'secondary';
+    btn.textContent = 'Clear';
+    btn.style.marginLeft = 'auto';
+    btn.onclick = function() { clearConversation(sender); };
+    row.appendChild(btn);
+    el.appendChild(row);
+  }
+}
+
+async function clearConversation(sender) {
+  if (!confirm('Clear conversation with ' + sender + '?')) return;
+  try {
+    const r = await fetch('/api/conversations/reset', {method: 'POST', headers: headers(), body: JSON.stringify({sender: sender})});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) { showMessage('Clear failed', true); return; }
+    loadStats();
+  } catch (e) { showMessage('Clear failed: ' + e, true); }
+}
+
+async function pullModel() {
+  const name = document.getElementById('pull_model').value.trim();
+  if (!name) return;
+  showMessage('Pulling ' + name + '… (this may take a while)', false);
+  try {
+    const r = await fetch('/api/models/pull', {method: 'POST', headers: headers(), body: JSON.stringify({name: name})});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) { const d = await r.json().catch(() => ({})); showMessage(d.error || 'Pull failed', true); return; }
+    showMessage('Pulled ' + name, false);
+    document.getElementById('pull_model').value = '';
+    loadModels();
+  } catch (e) { showMessage('Pull failed: ' + e, true); }
+}
+
 function saveToken() {
   token = document.getElementById('token').value.trim();
   localStorage.setItem(TOKEN_KEY, token);
   loadModels();
   loadConfig();
   refreshStatus();
+  loadStats();
   loadQR();
 }
 
 (async function init() {
+  if (localStorage.getItem('osb_theme') === 'dark') document.body.classList.add('dark');
   await loadModels();
   await loadConfig();
   await refreshStatus();
+  loadStats();
   loadQR();
   setInterval(refreshStatus, 3000);
 })();
@@ -395,6 +491,39 @@ async def _reset_config(request):
     return web.json_response(bot.get_runtime_config())
 
 
+async def _stats(request):
+    bot = request.app[_BOT_KEY]
+    return web.json_response(bot.get_stats())
+
+
+async def _reset_conversation(request):
+    bot = request.app[_BOT_KEY]
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    sender = (data or {}).get("sender", "").strip()
+    if not sender:
+        return web.json_response({"error": "sender is required"}, status=400)
+    count = bot.clear_sender_history(sender)
+    return web.json_response({"sender": sender, "cleared": count})
+
+
+async def _pull_model(request):
+    bot = request.app[_BOT_KEY]
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    name = (data or {}).get("name", "").strip()
+    if not name:
+        return web.json_response({"error": "model name is required"}, status=400)
+    ok = await bot.pull_model(name)
+    if not ok:
+        return web.json_response({"error": f"pull failed for '{name}'"}, status=500)
+    return web.json_response({"pulled": name})
+
+
 def create_app(bot, token=None):
     app = web.Application(middlewares=[_auth_middleware])
     app[_BOT_KEY] = bot
@@ -406,6 +535,9 @@ def create_app(bot, token=None):
     app.router.add_get("/api/config", _get_config)
     app.router.add_put("/api/config", _put_config)
     app.router.add_post("/api/config/reset", _reset_config)
+    app.router.add_get("/api/stats", _stats)
+    app.router.add_post("/api/conversations/reset", _reset_conversation)
+    app.router.add_post("/api/models/pull", _pull_model)
     return app
 
 

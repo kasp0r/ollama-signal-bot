@@ -192,8 +192,8 @@ Signal app  ⇄  signal-cli-rest-api  ⇄  bot  ⇄  Ollama
 ## Privacy
 
 - Messages are decrypted on your machine only; plaintext travels over the **local Docker network** and never touches the internet.
-- **Conversation history is in memory only** — never written to disk, cleared on restart or `/reset`.
-- The only persisted data is your Signal device keys (`signal-cli-data` volume) and the Ollama model files.
+- **Conversation history is stored in a local SQLite database** (`history.db` in the `bot-data` volume) — it persists across restarts but stays on your machine.
+- The only persisted data is your Signal device keys (`signal-cli-data` volume), the conversation history, and the Ollama model files.
 
 ## Security
 

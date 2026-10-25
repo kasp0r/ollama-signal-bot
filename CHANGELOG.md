@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Makefile` with `make` shortcuts for common tasks.
 - Web UI for runtime configuration and monitoring: dependency status (signal-api, Ollama, account), first-run QR linking, persisted config with optional token auth.
 - Phone-number auto-detection (`SIGNAL_PHONE_NUMBER` is now optional).
+- SQLite-persisted conversation history (`history.db` in the `bot-data` volume).
+- Web UI stats panel, per-user conversation reset, model pull, model sizes in the dropdown, and dark mode.
 
 ### Changed
 
