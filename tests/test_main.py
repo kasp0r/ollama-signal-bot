@@ -519,6 +519,18 @@ def test_config_persistence(tmp_path):
     assert bot2.max_history == 42
 
 
+def test_load_runtime_config_skips_blank_values(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"ollama_model": "", "system_prompt": "", "temperature": 0.3}))
+    bot = _make_bot(config_file=str(cfg))
+    bot.load_runtime_config()
+    # blank strings must not wipe the env/default values
+    assert bot.ollama_model == "gemma4:latest"
+    assert bot.system_prompt == "You are a helpful assistant."
+    # non-blank values still apply
+    assert bot.temperature == 0.3
+
+
 def test_get_status():
     bot = _make_bot()
     status = bot.get_status()

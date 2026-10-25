@@ -183,7 +183,16 @@ async function refreshStatus() {
     if (!r.ok) return;
     const s = await r.json();
     renderStatus(s);
-    fillForm(s);
+    hideToken();
+  } catch (e) { /* transient */ }
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config', {headers: headers()});
+    if (r.status === 401) { showToken(); return; }
+    if (!r.ok) return;
+    fillForm(await r.json());
     hideToken();
   } catch (e) { /* transient */ }
 }
@@ -223,10 +232,12 @@ async function saveConfig(e) {
 function saveToken() {
   token = document.getElementById('token').value.trim();
   localStorage.setItem(TOKEN_KEY, token);
+  loadConfig();
   refreshStatus();
   loadQR();
 }
 
+loadConfig();
 refreshStatus();
 loadQR();
 setInterval(refreshStatus, 3000);

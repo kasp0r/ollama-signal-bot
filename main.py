@@ -266,6 +266,8 @@ class OllamaSignalBot:
             return
         if not isinstance(data, dict):
             return
+        # Skip blank string values so a stale/empty config can't wipe env defaults.
+        data = {k: v for k, v in data.items() if not (isinstance(v, str) and not v.strip())}
         try:
             self._apply_config(data)
         except (ValueError, TypeError):
