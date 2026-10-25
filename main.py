@@ -859,35 +859,70 @@ class OllamaSignalBot:
 
     # ── Lifecycle ───────────────────────────────────────────────────
 
-    async def wait_for_api(self):
-        """Wait for signal-cli-rest-api to be ready."""
-        logger.info("Waiting for Signal API to be ready...")
-        for i in range(60):
-            try:
-                r = await self.client.get(f"{self.signal_api_url}/v1/about")
-                if r.status_code == 200:
-                    logger.info(f"Signal API is ready: {r.json()}")
-                    return
-            except Exception:
-                pass
-            await asyncio.sleep(2)
-        logger.error("Signal API did not become ready in time")
-        sys.exit(1)
+    async def check_dependencies(self) -> dict:
+        """Check the health of signal-api, Ollama, and account linking."""
+        status = {
+            "signal_api": {"ok": False},
+            "ollama": {"ok": False},
+            "account": {"linked": False, "phone_number": None},
+        }
 
-    async def detect_phone_number(self):
-        """Auto-detect the bot's phone number from linked Signal accounts."""
+        # signal-api
         try:
-            r = await self.client.get(f"{self.signal_api_url}/v1/accounts", timeout=10.0)
-            r.raise_for_status()
-            accounts = r.json()
-        except Exception as e:
-            logger.error(f"Could not list Signal accounts: {e}")
-            return None
-        if not isinstance(accounts, list) or not accounts:
-            return None
-        if len(accounts) > 1:
-            logger.warning(f"Multiple linked accounts ({accounts}); using the first")
-        return str(accounts[0])
+            r = await self.client.get(f"{self.signal_api_url}/v1/about", timeout=5.0)
+            if r.status_code == 200:
+                status["signal_api"]["ok"] = True
+                status["signal_api"]["version"] = r.json().get("version")
+        except Exception:
+            pass
+
+        # Ollama
+        try:
+            r = await self.client.get(f"{self.ollama_url}/api/tags", timeout=5.0)
+            if r.status_code == 200:
+                data = r.json()
+                status["ollama"]["ok"] = True
+                status["ollama"]["models"] = len(data.get("models", []))
+        except Exception:
+            pass
+
+        # Linked Signal account
+        try:
+            r = await self.client.get(f"{self.signal_api_url}/v1/accounts", timeout=5.0)
+            if r.status_code == 200:
+                accounts = r.json()
+                if isinstance(accounts, list) and accounts:
+                    status["account"]["linked"] = True
+                    status["account"]["phone_number"] = str(accounts[0])
+        except Exception:
+            pass
+
+        return status
+
+    async def _wait_until_ready(self):
+        """Wait until signal-api is up, an account is linked, and a model is set."""
+        while True:
+            _touch_heartbeat()
+            deps = await self.check_dependencies()
+
+            if not deps["signal_api"]["ok"]:
+                await asyncio.sleep(2)
+                continue
+
+            if not self.phone_number:
+                self.phone_number = deps["account"]["phone_number"]
+                if not self.phone_number:
+                    await asyncio.sleep(2)
+                    continue
+                logger.info(f"Bot phone number: {self.phone_number}")
+
+            if not self.ollama_model:
+                await self.auto_detect_model()
+                if not self.ollama_model:
+                    await asyncio.sleep(2)
+                    continue
+
+            return
 
     async def auto_detect_model(self):
         """Auto-detect an Ollama model if none was configured, or validate the configured one."""
@@ -932,16 +967,7 @@ class OllamaSignalBot:
 
     async def run(self):
         """Main polling loop."""
-        await self.wait_for_api()
-
-        if not self.phone_number:
-            self.phone_number = await self.detect_phone_number()
-            if not self.phone_number:
-                logger.error("No linked Signal account found. Link the bot first (scan the QR code), then restart.")
-                sys.exit(1)
-            logger.info(f"Auto-detected bot phone number: {self.phone_number}")
-
-        await self.auto_detect_model()
+        await self._wait_until_ready()
         logger.info(f"Bot is running — polling for messages... (model: {self.ollama_model or 'NONE'})")
 
         while True:

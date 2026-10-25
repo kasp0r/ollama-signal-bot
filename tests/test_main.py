@@ -580,19 +580,58 @@ def test_webui_auth():
     asyncio.run(run())
 
 
-# ── phone-number auto-detection ───────────────────────────────────
+# ── dependency checks ────────────────────────────────────────────
 
-def test_detect_phone_number():
+def test_check_dependencies():
     def handler(request):
-        return httpx.Response(200, json=["+15551234567"])
+        if request.url.path == "/v1/about":
+            return httpx.Response(200, json={"version": "0.101"})
+        if request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "a"}, {"name": "b"}]})
+        if request.url.path == "/v1/accounts":
+            return httpx.Response(200, json=["+15551234567"])
+        return httpx.Response(404)
 
     bot = _mock_bot(handler)
-    assert asyncio.run(bot.detect_phone_number()) == "+15551234567"
+    deps = asyncio.run(bot.check_dependencies())
+    assert deps["signal_api"]["ok"] is True
+    assert deps["signal_api"]["version"] == "0.101"
+    assert deps["ollama"]["ok"] is True
+    assert deps["ollama"]["models"] == 2
+    assert deps["account"]["linked"] is True
+    assert deps["account"]["phone_number"] == "+15551234567"
 
 
-def test_detect_phone_number_none():
+def test_check_dependencies_offline():
     def handler(request):
+        return httpx.Response(500)
+
+    bot = _mock_bot(handler)
+    deps = asyncio.run(bot.check_dependencies())
+    assert deps["signal_api"]["ok"] is False
+    assert deps["ollama"]["ok"] is False
+    assert deps["account"]["linked"] is False
+
+
+def test_webui_status():
+    def handler(request):
+        if request.url.path == "/v1/about":
+            return httpx.Response(200, json={"version": "0.101"})
         return httpx.Response(200, json=[])
 
     bot = _mock_bot(handler)
-    assert asyncio.run(bot.detect_phone_number()) is None
+
+    async def run():
+        server = TestServer(webui.create_app(bot))
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            resp = await client.get("/api/status")
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["dependencies"]["signal_api"]["ok"] is True
+            assert data["dependencies"]["account"]["linked"] is False
+        finally:
+            await client.close()
+
+    asyncio.run(run())

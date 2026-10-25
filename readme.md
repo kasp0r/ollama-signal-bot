@@ -82,7 +82,7 @@ The bot runs as a *linked device* on its own number (like Signal Desktop), so yo
 
 1. **Get a second number** — a second SIM/eSIM, or a VoIP number that can receive SMS once for initial registration.
 2. **Install Signal on that number** — e.g. a spare device, or a cloned app on Android via [App Cloner](https://appcloner.app/).
-3. **Link the bot** — when `setup.py` shows the QR code, open the cloned app and scan it: **Settings → Linked Devices → +**.
+3. **Link the bot** — open the web UI (`http://127.0.0.1:8000`) and scan the QR code with the cloned app: **Settings → Linked Devices → +**. (Or run `python setup.py`, which does the same.)
 
 The app remains the primary device; the bot is linked to it and must stay installed.
 
@@ -129,15 +129,17 @@ These commands are also available as `make` shortcuts — run `make` to list the
 
 ## Web UI
 
-The bot serves a small web UI for runtime configuration. Open it at:
+The bot serves a web UI for configuration and monitoring. Open it at:
 
 ```
 http://127.0.0.1:8000
 ```
 
-It lets you change the model, temperature, system prompt, history limit, and
-allowlists — changes apply immediately and persist across restarts (stored in
-the `bot-data` volume).
+It shows the status of the bot and its dependencies (signal-api, Ollama, and
+the linked Signal account), lets you **link the account on first run** by
+scanning the QR code, and lets you change the model, temperature, system
+prompt, history limit, and allowlists — changes apply immediately and persist
+across restarts (stored in the `bot-data` volume).
 
 By default the UI is bound to `127.0.0.1` (localhost only). To require a
 password, set `WEBUI_TOKEN` in `.env`; the UI will then prompt for it.

@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ollama generation options (`num_predict` limit and configurable `temperature`).
 - Docker healthcheck for the bot container.
 - `Makefile` with `make` shortcuts for common tasks.
-- Web UI for runtime configuration (persisted to a volume, optional token auth).
+- Web UI for runtime configuration and monitoring: dependency status (signal-api, Ollama, account), first-run QR linking, persisted config with optional token auth.
+- Phone-number auto-detection (`SIGNAL_PHONE_NUMBER` is now optional).
 
 ### Changed
 
