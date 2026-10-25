@@ -659,6 +659,8 @@ def test_check_dependencies():
             return httpx.Response(200, json={"version": "0.101"})
         if request.url.path == "/api/tags":
             return httpx.Response(200, json={"models": [{"name": "a"}, {"name": "b"}]})
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "0.40.9"})
         if request.url.path == "/v1/accounts":
             return httpx.Response(200, json=["+15551234567"])
         return httpx.Response(404)
@@ -669,6 +671,7 @@ def test_check_dependencies():
     assert deps["signal_api"]["version"] == "0.101"
     assert deps["ollama"]["ok"] is True
     assert deps["ollama"]["models"] == 2
+    assert deps["ollama"]["version"] == "0.40.9"
     assert deps["account"]["linked"] is True
     assert deps["account"]["phone_number"] == "+15551234567"
 

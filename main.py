@@ -912,7 +912,7 @@ class OllamaSignalBot:
         """Check the health of signal-api, Ollama, and account linking."""
         status = {
             "signal_api": {"ok": False},
-            "ollama": {"ok": False},
+            "ollama": {"ok": False, "models": None, "version": None},
             "account": {"linked": False, "phone_number": None},
         }
 
@@ -932,6 +932,13 @@ class OllamaSignalBot:
                 data = r.json()
                 status["ollama"]["ok"] = True
                 status["ollama"]["models"] = len(data.get("models", []))
+        except Exception:
+            pass
+
+        try:
+            r = await self.client.get(f"{self.ollama_url}/api/version", timeout=5.0)
+            if r.status_code == 200:
+                status["ollama"]["version"] = r.json().get("version")
         except Exception:
             pass
 

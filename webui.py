@@ -172,7 +172,9 @@ function renderStatus(s) {
 
   setDot('dot-ollama', d.ollama && d.ollama.ok ? 'ok' : 'bad');
   document.getElementById('status-ollama').textContent =
-    d.ollama && d.ollama.ok ? (d.ollama.models + ' models') : 'offline';
+    d.ollama && d.ollama.ok
+      ? (d.ollama.version ? 'v' + d.ollama.version + ' \u00b7 ' : '') + d.ollama.models + ' models'
+      : 'offline';
 
   const linked = d.account && d.account.linked;
   setDot('dot-account', linked ? 'ok' : 'wait');
