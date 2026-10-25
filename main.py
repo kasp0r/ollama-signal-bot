@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from collections import defaultdict
@@ -33,8 +34,20 @@ START_TIME = datetime.now(timezone.utc)
 # Security limits
 MAX_INPUT_LENGTH = 4000       # max chars of a user message sent to Ollama
 MAX_OUTPUT_LENGTH = 4000      # max chars of a model response returned to Signal
+MAX_OUTPUT_TOKENS = 1024      # Ollama num_predict (max generated tokens)
+DEFAULT_TEMPERATURE = 0.7     # Ollama sampling temperature
 RATE_LIMIT_MESSAGES = 10      # max messages per sender within the window
 RATE_LIMIT_WINDOW_SECONDS = 60
+HEARTBEAT_FILE = "/tmp/ollama-signal-bot.heartbeat"
+
+
+def _touch_heartbeat() -> None:
+    """Update the heartbeat file's mtime to signal the bot is still alive."""
+    try:
+        with open(HEARTBEAT_FILE, "w") as f:
+            f.write(".")
+    except OSError:
+        pass
 
 def format_for_signal(text: str) -> str:
     """
@@ -103,12 +116,14 @@ class OllamaSignalBot:
         system_prompt: str = "You are a helpful assistant.",
         allowed_senders: str = "*",
         allowed_admins: str = "*",
+        temperature: float = DEFAULT_TEMPERATURE,
     ):
         self.phone_number = phone_number
         self.signal_api_url = signal_api_url.rstrip("/")
         self.ollama_url = ollama_url.rstrip("/")
         self.ollama_model = ollama_model
         self.system_prompt = system_prompt
+        self.temperature = temperature
         self.client = httpx.AsyncClient(timeout=180.0)
         self.max_history = MAX_HISTORY
 
@@ -199,6 +214,10 @@ class OllamaSignalBot:
                     *self.conversations[sender],
                 ],
                 "stream": False,
+                "options": {
+                    "num_predict": MAX_OUTPUT_TOKENS,
+                    "temperature": self.temperature,
+                },
             }
 
             logger.info(f"Querying Ollama ({self.ollama_model}) Prompt length: {len(prompt)}")
@@ -698,6 +717,12 @@ class OllamaSignalBot:
             return
 
         sender = envelope.get("source", "unknown")
+
+        # Ignore group messages — v1 is one-to-one only
+        if data_message.get("groupInfo"):
+            logger.info(f"Ignoring group message from {sender}")
+            return
+
         logger.info(f"Message received from {sender} Message length: {len(message_text)}")
 
         # Sender allowlist check
@@ -813,6 +838,7 @@ class OllamaSignalBot:
             except Exception as e:
                 logger.error(f"Error in polling loop: {e}")
 
+            _touch_heartbeat()
             await asyncio.sleep(1)
 
     async def stop(self):
@@ -828,6 +854,10 @@ async def main():
     system_prompt = os.getenv("SYSTEM_PROMPT", "You are a helpful assistant.")
     allowed_senders = os.getenv("ALLOWED_SENDERS", "*")
     allowed_admins = os.getenv("ALLOWED_ADMINS", "*")
+    try:
+        temperature = float(os.getenv("OLLAMA_TEMPERATURE", "") or DEFAULT_TEMPERATURE)
+    except ValueError:
+        temperature = DEFAULT_TEMPERATURE
 
     if not phone_number:
         logger.error("SIGNAL_PHONE_NUMBER is required. Set it in .env")
@@ -841,15 +871,31 @@ async def main():
         system_prompt=system_prompt,
         allowed_senders=allowed_senders,
         allowed_admins=allowed_admins,
+        temperature=temperature,
     )
 
     try:
         await bot.run()
-    except KeyboardInterrupt:
+    except asyncio.CancelledError:
         logger.info("Shutting down...")
     finally:
         await bot.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    main_task = loop.create_task(main())
+
+    # Cancel the main task on SIGINT/SIGTERM so shutdown is graceful.
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, main_task.cancel)
+        except (NotImplementedError, RuntimeError):
+            # Windows fallback: schedule the cancel thread-safely.
+            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(main_task.cancel))
+
+    try:
+        loop.run_until_complete(main_task)
+    finally:
+        loop.close()

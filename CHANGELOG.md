@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `/recent [n]` and `/config` slash commands.
 - Automated test suite and GitHub Actions CI.
 - Animated demo GIF and Open Graph social-preview image.
+- Ollama generation options (`num_predict` limit and configurable `temperature`).
+- Docker healthcheck for the bot container.
 
 ### Changed
 
@@ -25,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pinned `ollama` to `0.40.11` and upgraded `signal-cli-rest-api` to `0.101`.
 - Rewrote the README with badges, table of contents, attribution, and a
   troubleshooting table.
+- Graceful shutdown on SIGINT/SIGTERM.
+- Ignore group messages (one-to-one chat only).
 
 ### Security
 

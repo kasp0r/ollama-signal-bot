@@ -74,13 +74,14 @@ def test_snake_case_not_italicized():
 
 # ── sender allowlist ──────────────────────────────────────────────
 
-def _make_bot(allowed_senders="*", allowed_admins="*"):
+def _make_bot(allowed_senders="*", allowed_admins="*", temperature=main.DEFAULT_TEMPERATURE):
     return main.OllamaSignalBot(
         phone_number="+15551234567",
         signal_api_url="http://signal-api:8080",
         ollama_url="http://ollama:11434",
         allowed_senders=allowed_senders,
         allowed_admins=allowed_admins,
+        temperature=temperature,
     )
 
 
@@ -422,3 +423,40 @@ def test_handle_message_caps_input():
     envelope = {"source": "+123", "dataMessage": {"message": "y" * 6000}}
     asyncio.run(bot.handle_message(envelope))
     assert len(chat_payloads[0]["messages"][-1]["content"]) == main.MAX_INPUT_LENGTH
+
+
+# ── group handling and generation options ────────────────────────
+
+def test_handle_message_ignores_group():
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    bot = _mock_bot(handler)
+    envelope = {
+        "source": "+123",
+        "dataMessage": {"message": "hello", "groupInfo": {"groupId": "abc"}},
+    }
+    asyncio.run(bot.handle_message(envelope))
+    assert requests == []  # no typing, no send, no Ollama query
+
+
+def test_query_ollama_sends_generation_options():
+    payloads = []
+
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"message": {"content": "ok"}})
+
+    bot = _mock_bot(handler)
+    asyncio.run(bot.query_ollama("+123", "hi"))
+    options = payloads[0].get("options", {})
+    assert options["num_predict"] == main.MAX_OUTPUT_TOKENS
+    assert options["temperature"] == main.DEFAULT_TEMPERATURE
+
+
+def test_temperature_configurable():
+    bot = _make_bot(temperature=0.3)
+    assert bot.temperature == 0.3

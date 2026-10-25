@@ -49,6 +49,12 @@ services:
     depends_on:
       - signal-api
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y /tmp/ollama-signal-bot.heartbeat 2>/dev/null || echo 0) )) -lt 60"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 volumes:
   signal-cli-data:

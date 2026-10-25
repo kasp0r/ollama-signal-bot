@@ -93,6 +93,7 @@ The app remains the primary device; the bot is linked to it and must stay instal
 | `SIGNAL_PHONE_NUMBER` | Yes | — | The bot's Signal number (e.g. `+1234567890`) |
 | `OLLAMA_URL` | No | `http://ollama:11434` | Ollama URL (see below) |
 | `OLLAMA_MODEL` | No | auto-detect | Model name (e.g. `gemma4:latest`) |
+| `OLLAMA_TEMPERATURE` | No | `0.7` | Sampling temperature (0.0-1.0) |
 | `SYSTEM_PROMPT` | No | `You are a helpful assistant.` | System prompt for every reply |
 | `ALLOWED_SENDERS` | No | `*` | `*` = everyone, or comma-separated numbers |
 | `ALLOWED_ADMINS` | No | `*` | Who can run admin commands (`*` = everyone, or numbers) |
@@ -118,9 +119,11 @@ docker compose down                         # stop (add --profile ollama to stop
 git pull && docker compose build && docker compose up -d   # update to the latest code
 ```
 
+`docker compose ps` shows a health status for the bot (healthy/unhealthy).
+
 ## Bot commands
 
-Send any of these to the bot's number:
+Send any of these to the bot's number (one-to-one chats only — group messages are ignored):
 
 | Command | Description |
 |---|---|
